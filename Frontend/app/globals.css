@@ -24,3 +24,25 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+button[data-card] {
+  transition: transform 160ms ease, box-shadow 160ms ease;
+  transform: translateZ(0);
+  will-change: transform;
+}
+
+button[data-card]:hover {
+  transform: scale(1.04);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+}
+
+button[data-card]:active {
+  transform: scale(1.01);
+}
+
+button[data-card]:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.9);
+  outline-offset: 4px;
+}
+
+
+
