@@ -1,0 +1,54 @@
+{
+  "team": {
+    "name": "CSU Vikes Green",
+    "game": "League of Legends",
+    "season": "Spring 2026",
+    "region": "Collegiate Midwest",
+    "overallRecord": "14-6",
+    "winRate": 70,
+    "averageGameTime": "30:42",
+    "goldDifferenceAt15": 1250,
+    "firstBloodRate": 65,
+    "firstTowerRate": 58,
+    "dragonControlRate": 61,
+    "heraldControlRate": 64,
+    "baronControlRate": 67,
+    "earlyGameRating": 8.4,
+    "midGameRating": 7.8,
+    "lateGameRating": 8.6,
+    "teamKDA": 3.12,
+    "averageKillsPerGame": 15.8,
+    "averageDeathsPerGame": 9.3,
+    "averageGoldPerMinute": 1845,
+    "averageVisionScorePerMinute": 3.4,
+    "preferredPlaystyle": "Strong early objective control with scaling teamfight focus",
+    "bestSide": "Blue",
+    "worstSide": "Red"
+  },
+  "players": [
+    { "name": "VIKES 1", "role": "Top", "championPool": ["Aatrox", "Renekton", "Gnar", "Ornn"], "gamesPlayed": 20, "KDA": 2.9 },
+    { "name": "VIKES 2", "role": "Jungle", "championPool": ["Lee Sin", "Viego", "Sejuani", "Maokai"], "gamesPlayed": 20, "KDA": 3.8 },
+    { "name": "VIKES 3", "role": "Mid", "championPool": ["Orianna", "Ahri", "Syndra", "Taliyah"], "gamesPlayed": 20, "KDA": 4.1 },
+    { "name": "VIKES 4", "role": "ADC", "championPool": ["Jinx", "Aphelios", "Kai'Sa", "Xayah"], "gamesPlayed": 20, "KDA": 4.5 },
+    { "name": "VIKES 5", "role": "Support", "championPool": ["Nautilus", "Thresh", "Rakan", "Lulu"], "gamesPlayed": 20, "KDA": 4.8 }
+  ],
+  "draftTrends": {
+    "mostBannedAgainst": ["Orianna", "Jinx"],
+    "flexPickRate": 18,
+    "redSideCounterPickWinRate": 74,
+    "averageDraftAdaptabilityRating": 8.3,
+    "earlyGameCompWinRate": 68,
+    "scalingCompWinRate": 73
+  },
+  "teamStrengths": [
+    "Strong dragon stacking and objective setups",
+    "High mid-jungle synergy",
+    "Late game teamfight execution",
+    "Strong vision denial around Baron"
+  ],
+  "teamWeaknesses": [
+    "Occasional overforce in early skirmishes",
+    "Top lane vulnerable to heavy early dive comps",
+    "Struggles against heavy split-push strategies"
+  ]
+}
