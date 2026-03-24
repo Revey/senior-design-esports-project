@@ -31,31 +31,46 @@ def riot_get(url: str, params=None):
     return requests.get(url, headers=DEFAULT_HEADERS, params=params, timeout=20)
 
 
+# Return values for get_puuid_by_riot_id:
+PUUID_RATE_LIMITED = "RATE_LIMITED"   # 429 — hit API limit, retry later
+PUUID_NOT_FOUND    = "NOT_FOUND"      # 404 — account doesn't exist / name changed
+PUUID_ERROR        = "ERROR"          # unexpected status code
+
+
 def get_puuid_by_riot_id(game_name: str, tag_line: str):
     """
     Returns the player's PUUID using Riot ID (gameName#tagLine).
-    Returns None if not found.
+
+    Return values:
+        str (puuid)          — success
+        PUUID_NOT_FOUND      — 404, account not found or name changed
+        PUUID_RATE_LIMITED   — 429, hit rate limit (retry later)
+        PUUID_ERROR          — unexpected HTTP error
+        None                 — network/request exception
     """
     encoded_name = requests.utils.quote(game_name, safe="")
-    encoded_tag = requests.utils.quote(tag_line, safe="")
+    encoded_tag  = requests.utils.quote(tag_line,  safe="")
 
     url = (
         "https://americas.api.riotgames.com"
         f"/riot/account/v1/accounts/by-riot-id/{encoded_name}/{encoded_tag}"
     )
 
-    resp = riot_get(url)
+    try:
+        resp = riot_get(url)
+    except Exception as e:
+        print(f"  [EXCEPTION] {game_name}#{tag_line}: {e}")
+        return None
 
     if resp.status_code == 200:
-        data = resp.json()
-        return data.get("puuid")
+        return resp.json().get("puuid")
 
     if resp.status_code == 404:
-        return None
+        return PUUID_NOT_FOUND
 
     if resp.status_code == 429:
-        print(f"  Riot API rate limited for {game_name}#{tag_line}")
-        return None
+        print(f"  [RATE LIMITED] {game_name}#{tag_line}")
+        return PUUID_RATE_LIMITED
 
-    print(f"  Riot API error {resp.status_code} for {game_name}#{tag_line}")
-    return None
+    print(f"  [HTTP {resp.status_code}] {game_name}#{tag_line}")
+    return PUUID_ERROR
