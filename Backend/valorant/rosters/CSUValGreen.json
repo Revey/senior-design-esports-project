@@ -1,0 +1,44 @@
+{
+  "teamName": "CSU Vikes Green",
+  "season": "Spring 2026",
+  "overallRecord": "18-7",
+  "roundWinRate": 54.8,
+  "pistolRoundWinRate": 61.2,
+  "attackWinRate": 52.3,
+  "defenseWinRate": 57.1,
+  "averageDamageDelta": "+8.3",
+  "bestMap": "Ascent",
+  "worstMap": "Icebox",
+  "players": [
+    {
+      "name": "VIKES Lian",
+      "gameName": "VIKES Lian",
+      "tagLine": "NA1",
+      "role": "Smokes"
+    },
+    {
+      "name": "VIKES N0ths",
+      "gameName": "VIKES N0ths",
+      "tagLine": "NA1",
+      "role": "Initiator"
+    },
+    {
+      "name": "VIKES Kamino",
+      "gameName": "VIKES Kamino",
+      "tagLine": "NA1",
+      "role": "Flex"
+    },
+    {
+      "name": "VIKES wyyu",
+      "gameName": "wyyu",
+      "tagLine": "NA1",
+      "role": "Duelist"
+    },
+    {
+      "name": "VIKES Exquisitely",
+      "gameName": "Exquisitely",
+      "tagLine": "NA1",
+      "role": "Sentinel"
+    }
+  ]
+}
