@@ -25,3 +25,9 @@ DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 
 # Cache (simple in-memory TTL in seconds)
 CACHE_TTL = int(os.getenv("CACHE_TTL", "300"))           # 5 minutes
+
+# MongoDB
+MONGO_URI            = os.getenv("MONGO_URI", "")
+MONGO_DB             = os.getenv("MONGO_DB", "senior_design_esports")
+VAL_COLLECTION       = os.getenv("VAL_COLLECTION", "VAL")
+VAL_STATS_COLLECTION = os.getenv("VAL_STATS_COLLECTION", "VAL_player_stats")

@@ -2,6 +2,10 @@
 
 __pycache__
 
+# Generated output files
+valorant/csu_custom_games.json
+valorant/necc_val_teams_puuids.json
+
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
 # dependencies

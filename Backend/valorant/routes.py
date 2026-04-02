@@ -12,9 +12,12 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import certifi
 from fastapi import APIRouter, HTTPException, Query
+from pymongo import MongoClient
 
 from . import riot_api, tracker_scraper
+from .config import MONGO_URI, MONGO_DB, VAL_COLLECTION, VAL_STATS_COLLECTION
 from .data_builder import build_team_payload
 from .models import ValorantTeamPayload, PlayerProfile
 
@@ -26,6 +29,19 @@ router = APIRouter(tags=["valorant"])
 _cache: dict = {}
 
 ROSTERS_DIR = Path(__file__).parent / "rosters"
+
+# MongoDB client (lazy-initialized)
+_mongo_client: Optional[MongoClient] = None
+
+
+def _get_db():
+    """Return the MongoDB database, creating the client on first call."""
+    global _mongo_client
+    if not MONGO_URI:
+        return None
+    if _mongo_client is None:
+        _mongo_client = MongoClient(MONGO_URI, tls=True, tlsCAFile=certifi.where())
+    return _mongo_client[MONGO_DB]
 
 
 def _cached(key: str, ttl: int, fn):
@@ -124,32 +140,70 @@ def get_team(
     """
     Build and return a full team payload for the frontend.
 
-    Reads the team roster from Backend/valorant/rosters/{team_id}.json.
+    Checks MongoDB VAL collection first, then falls back to a static roster file.
 
     Example: GET /api/valorant/team/CSUValGreen
     """
-    roster_file = ROSTERS_DIR / f"{team_id}.json"
-    if not roster_file.exists():
-        raise HTTPException(status_code=404, detail=f"Roster file not found: {team_id}.json")
-
-    with open(roster_file) as f:
-        team_config = json.load(f)
+    cache_key = f"team:{team_id}:{use_riot}:{use_scraper}:{num_matches}"
 
     def _build():
+        team_doc = None
+
+        # Try MongoDB first
+        db = _get_db()
+        if db is not None:
+            team_doc = db[VAL_COLLECTION].find_one(
+                {"team_name": {"$regex": team_id, "$options": "i"}},
+                {"_id": 0},
+            )
+
+        # Fall back to static roster file
+        if team_doc is None:
+            roster_file = ROSTERS_DIR / f"{team_id}.json"
+            if not roster_file.exists():
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Team not found in MongoDB or roster files: {team_id}",
+                )
+            with open(roster_file) as f:
+                team_doc = json.load(f)
+
+        # Enrich each player with stored stats from VAL_player_stats if available
+        if db is not None:
+            for player in team_doc.get("players", []):
+                riot_id  = player.get("riot_id") or f"{player.get('game_name','')}#{player.get('tag_line','')}"
+                stats_doc = db[VAL_STATS_COLLECTION].find_one({"riot_id": riot_id}, {"_id": 0})
+                if stats_doc:
+                    stored = stats_doc.get("tracker_stats") or stats_doc.get("riot_stats") or {}
+                    player.update({k: v for k, v in stored.items() if k not in player})
+
         return build_team_payload(
-            team_config,
+            team_doc,
             use_riot_api=use_riot,
             use_scraper=use_scraper,
             num_matches=num_matches,
         )
 
-    cache_key = f"team:{team_id}:{use_riot}:{use_scraper}:{num_matches}"
     return _cached(cache_key, ttl=300, fn=_build)
 
 
 @router.get("/teams")
 def list_teams():
-    """List all available team roster files."""
+    """
+    List all available teams.
+
+    Returns teams from MongoDB VAL collection if available,
+    otherwise falls back to static roster files.
+    """
+    db = _get_db()
+    if db is not None:
+        teams = list(
+            db[VAL_COLLECTION].find({}, {"_id": 0, "team_name": 1, "school": 1, "logo_url": 1})
+        )
+        if teams:
+            return {"teams": teams}
+
+    # Fallback: static roster files
     if not ROSTERS_DIR.exists():
         return {"teams": []}
     return {"teams": [f.stem for f in ROSTERS_DIR.glob("*.json")]}
