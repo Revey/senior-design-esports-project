@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import type { CSSProperties } from "react";
 
 type Team = {
@@ -95,7 +95,7 @@ function KPI({ label, value }: KPIProps) {
   );
 }
 
-export default function LeagueStatsPage() {
+function LeagueStatsContent() {
   const router = useRouter();
   const params = useSearchParams();
   const teamQuery = params.get("team") ?? "CSU";
@@ -256,6 +256,14 @@ export default function LeagueStatsPage() {
         </>
       )}
     </main>
+  );
+}
+
+export default function LeagueStatsPage() {
+  return (
+    <Suspense fallback={<main style={{ minHeight: "100vh", backgroundColor: "#0f172a", color: "white", padding: "2rem" }}>Loading…</main>}>
+      <LeagueStatsContent />
+    </Suspense>
   );
 }
 
