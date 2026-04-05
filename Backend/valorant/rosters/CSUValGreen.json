@@ -12,32 +12,32 @@
   "players": [
     {
       "name": "VIKES Lian",
-      "gameName": "VIKES Lian",
-      "tagLine": "NA1",
+      "gameName": "VIKES LIAN",
+      "tagLine": "NUNG",
       "role": "Smokes"
     },
     {
       "name": "VIKES N0ths",
       "gameName": "VIKES N0ths",
-      "tagLine": "NA1",
+      "tagLine": "amare",
       "role": "Initiator"
     },
     {
       "name": "VIKES Kamino",
       "gameName": "VIKES Kamino",
-      "tagLine": "NA1",
+      "tagLine": "CLE",
       "role": "Flex"
     },
     {
       "name": "VIKES wyyu",
       "gameName": "wyyu",
-      "tagLine": "NA1",
+      "tagLine": "1of1",
       "role": "Duelist"
     },
     {
       "name": "VIKES Exquisitely",
       "gameName": "Exquisitely",
-      "tagLine": "NA1",
+      "tagLine": "meow",
       "role": "Sentinel"
     }
   ]
