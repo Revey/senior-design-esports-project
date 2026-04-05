@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { CSSProperties } from "react";
 
@@ -60,7 +60,7 @@ function KPI({ label, value }: KPIProps) {
   );
 }
 
-export default function ValorantStatsPage() {
+function ValorantStatsContent() {
   const router = useRouter();
   const params = useSearchParams();
 
@@ -216,6 +216,14 @@ export default function ValorantStatsPage() {
         );
       })()}
     </main>
+  );
+}
+
+export default function ValorantStatsPage() {
+  return (
+    <Suspense fallback={<main style={{ minHeight: "100vh", backgroundColor: "#0f172a", color: "white", padding: "2rem" }}>Loading…</main>}>
+      <ValorantStatsContent />
+    </Suspense>
   );
 }
 
