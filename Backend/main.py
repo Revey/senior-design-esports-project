@@ -9,6 +9,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from valorant.config import FRONTEND_ORIGIN
 from valorant.routes import router as valorant_router
 
 logging.basicConfig(
@@ -25,7 +26,11 @@ app = FastAPI(
 # Allow the Next.js dev server and any future frontend origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:3001",
+        FRONTEND_ORIGIN,
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
