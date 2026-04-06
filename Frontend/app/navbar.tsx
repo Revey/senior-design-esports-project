@@ -9,6 +9,7 @@ const navItems = [
   { label: "Teams", href: "/teams" },
   { label: "Players", href: "/players" },
   { label: "About", href: "/about" },
+  { label: "Connect Riot", href: "/valorant/auth" },
 ];
 
 export default function Navbar() {

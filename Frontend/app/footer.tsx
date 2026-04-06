@@ -17,6 +17,11 @@ export default function Footer() {
       <p style={{ marginTop: "0.25rem" }}>
         Cleveland State University Esports - Washkewicz College of Engineering
       </p>
+      <p style={{ marginTop: "0.25rem" }}>
+        <a href="/privacy" style={{ color: "rgba(255,255,255,0.5)", textDecoration: "underline" }}>
+          Privacy Policy
+        </a>
+      </p>
     </footer>
   );
 }
