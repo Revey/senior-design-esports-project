@@ -6,18 +6,31 @@ Mount this in main.py:
     app.include_router(val_router, prefix="/api/valorant")
 """
 
+import base64
 import json
 import logging
+import secrets
 import time
 from pathlib import Path
 from typing import Optional
 
 import certifi
-from fastapi import APIRouter, HTTPException, Query
+import requests as http_requests
+from fastapi import APIRouter, Cookie, HTTPException, Query, Request
+from fastapi.responses import RedirectResponse
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from pymongo import MongoClient
 
-from . import riot_api, tracker_scraper
-from .config import MONGO_URI, MONGO_DB
+from . import riot_api, rso_store, tracker_scraper
+from .config import (
+    MONGO_URI,
+    MONGO_DB,
+    RSO_CLIENT_ID,
+    RSO_CLIENT_SECRET,
+    RSO_REDIRECT_URI,
+    FRONTEND_ORIGIN,
+    SESSION_SECRET,
+)
 from .data_builder import build_team_payload
 from .models import ValorantTeamPayload, PlayerProfile
 
@@ -32,6 +45,17 @@ ROSTERS_DIR = Path(__file__).parent / "rosters"
 
 # MongoDB client (lazy-initialized)
 _mongo_client: Optional[MongoClient] = None
+
+# RSO OAuth constants
+_RSO_AUTHORIZE_URL = "https://auth.riotgames.com/authorize"
+_RSO_TOKEN_URL = "https://auth.riotgames.com/token"
+_RSO_USERINFO_URL = "https://auth.riotgames.com/userinfo"
+
+# Session cookie signer
+_signer = URLSafeTimedSerializer(SESSION_SECRET)
+_SESSION_COOKIE = "rso_session"
+_STATE_COOKIE = "rso_state"
+_SESSION_MAX_AGE = 86400 * 30  # 30 days
 
 
 def _get_db():
@@ -216,35 +240,188 @@ def get_leaderboard(
 # RSO (Riot Sign On) endpoints
 # ---------------------------------------------------------------------------
 
+def _set_cookie(response, key: str, value: str, max_age: int = _SESSION_MAX_AGE):
+    """Set a secure, HTTP-only cookie on the response."""
+    response.set_cookie(
+        key=key,
+        value=value,
+        httponly=True,
+        secure=True,
+        samesite="none",
+        max_age=max_age,
+        path="/api/valorant/auth",
+    )
+
+
+def _get_session_puuid(rso_session: Optional[str]) -> Optional[str]:
+    """Extract and verify the PUUID from a signed session cookie."""
+    if not rso_session:
+        return None
+    try:
+        return _signer.loads(rso_session, max_age=_SESSION_MAX_AGE)
+    except (BadSignature, SignatureExpired):
+        return None
+
+
 @router.get("/auth/login")
 def rso_login():
-    """
-    Redirect to Riot's OAuth authorization URL.
-    Uses placeholder client_id for demo — this shows Riot the intended flow.
-    """
-    riot_auth_url = (
-        "https://auth.riotgames.com/authorize"
-        "?response_type=code"
-        "&client_id=YOUR_CLIENT_ID_PLACEHOLDER"
-        "&redirect_uri=https://esports.csuohio.edu/api/valorant/auth/callback"
-        "&scope=openid+offline_access"
+    """Redirect the browser to Riot Sign On to begin the OAuth flow."""
+    state = secrets.token_urlsafe(32)
+
+    authorize_url = (
+        f"{_RSO_AUTHORIZE_URL}"
+        f"?redirect_uri={RSO_REDIRECT_URI}"
+        f"&client_id={RSO_CLIENT_ID}"
+        f"&response_type=code"
+        f"&scope=openid+offline_access"
+        f"&state={state}"
     )
-    return {"redirect_url": riot_auth_url}
+
+    response = RedirectResponse(url=authorize_url, status_code=302)
+    # Store state in a short-lived cookie for CSRF validation in the callback
+    _set_cookie(response, _STATE_COOKIE, _signer.dumps(state), max_age=600)
+    return response
 
 
 @router.get("/auth/callback")
-def rso_callback(code: str = None, error: str = None):
+def rso_callback(
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+    request: Request = None,
+):
     """
     Handle the OAuth callback from Riot.
-    In production this exchanges the code for tokens.
-    For demo: simulate success.
+
+    Exchanges the authorization code for tokens, fetches userinfo,
+    stores tokens in MongoDB, sets a session cookie, and redirects
+    back to the frontend.
     """
+    error_redirect = f"{FRONTEND_ORIGIN}/valorant/auth?status=error"
+
     if error or not code:
-        return {"status": "error", "message": error or "No code returned"}
-    # In production this exchanges the code for tokens
-    # For demo: simulate success
+        msg = error or "no_code"
+        return RedirectResponse(url=f"{error_redirect}&message={msg}")
+
+    # --- CSRF: validate state ---
+    state_cookie = request.cookies.get(_STATE_COOKIE) if request else None
+    expected_state = None
+    if state_cookie:
+        try:
+            expected_state = _signer.loads(state_cookie, max_age=600)
+        except (BadSignature, SignatureExpired):
+            pass
+
+    if not expected_state or expected_state != state:
+        return RedirectResponse(url=f"{error_redirect}&message=invalid_state")
+
+    # --- Exchange code for tokens ---
+    credentials = base64.b64encode(
+        f"{RSO_CLIENT_ID}:{RSO_CLIENT_SECRET}".encode()
+    ).decode()
+
+    try:
+        token_resp = http_requests.post(
+            _RSO_TOKEN_URL,
+            headers={"Authorization": f"Basic {credentials}"},
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": RSO_REDIRECT_URI,
+            },
+            timeout=10,
+        )
+        token_resp.raise_for_status()
+        token_data = token_resp.json()
+    except http_requests.RequestException as exc:
+        logger.error("RSO token exchange failed: %s", exc)
+        return RedirectResponse(url=f"{error_redirect}&message=token_exchange_failed")
+
+    access_token = token_data.get("access_token")
+    if not access_token:
+        return RedirectResponse(url=f"{error_redirect}&message=no_access_token")
+
+    # --- Fetch userinfo to get the player's PUUID ---
+    try:
+        userinfo_resp = http_requests.get(
+            _RSO_USERINFO_URL,
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=10,
+        )
+        userinfo_resp.raise_for_status()
+        userinfo = userinfo_resp.json()
+    except http_requests.RequestException as exc:
+        logger.error("RSO userinfo request failed: %s", exc)
+        return RedirectResponse(url=f"{error_redirect}&message=userinfo_failed")
+
+    puuid = userinfo.get("sub", "")
+    if not puuid:
+        return RedirectResponse(url=f"{error_redirect}&message=no_puuid")
+
+    # --- Look up Riot ID for display ---
+    game_name, tag_line = "", ""
+    try:
+        profile = riot_api.get_account_by_puuid(puuid)
+        game_name = profile.gameName
+        tag_line = profile.tagLine
+    except Exception as exc:
+        logger.warning("Could not look up Riot ID for %s: %s", puuid[:8], exc)
+
+    # --- Store tokens in MongoDB ---
+    rso_store.store_tokens(puuid, token_data, game_name, tag_line)
+
+    # --- Set session cookie and redirect to frontend ---
+    response = RedirectResponse(
+        url=f"{FRONTEND_ORIGIN}/valorant/auth?status=success",
+        status_code=302,
+    )
+    _set_cookie(response, _SESSION_COOKIE, _signer.dumps(puuid))
+    # Clear the state cookie
+    response.delete_cookie(_STATE_COOKIE, path="/api/valorant/auth")
+    return response
+
+
+@router.get("/auth/status")
+def rso_status(rso_session: Optional[str] = Cookie(default=None)):
+    """Check whether the current user has a valid RSO session."""
+    puuid = _get_session_puuid(rso_session)
+    if not puuid:
+        return {"authenticated": False}
+
+    tokens = rso_store.get_tokens(puuid)
+    if not tokens:
+        return {"authenticated": False}
+
     return {
-        "status": "success",
-        "message": "Riot account linked successfully",
-        "scope": "match_history_custom_games"
+        "authenticated": True,
+        "puuid": puuid,
+        "gameName": tokens.get("game_name", ""),
+        "tagLine": tokens.get("tag_line", ""),
+    }
+
+
+@router.post("/auth/logout")
+def rso_logout():
+    """Clear the RSO session cookie."""
+    response = RedirectResponse(
+        url=f"{FRONTEND_ORIGIN}/valorant/auth",
+        status_code=302,
+    )
+    response.delete_cookie(_SESSION_COOKIE, path="/api/valorant/auth")
+    return response
+
+
+@router.get("/auth/linked-players")
+def rso_linked_players():
+    """Return all players who have linked their Riot accounts via RSO."""
+    players = rso_store.list_linked_players()
+    return {
+        "players": [
+            {
+                "puuid": p.get("puuid", ""),
+                "gameName": p.get("game_name", ""),
+                "tagLine": p.get("tag_line", ""),
+            }
+            for p in players
+        ]
     }

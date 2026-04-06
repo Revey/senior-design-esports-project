@@ -1,8 +1,10 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import type { CSSProperties } from "react";
+
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
 
 const CSU_ROSTER = [
   { ign: "VIKES Lian",        name: "Lian",              role: "Smokes" },
@@ -12,28 +14,82 @@ const CSU_ROSTER = [
   { ign: "VIKES Exquisitely", name: "Ziyeir Norman",     role: "Sentinel" },
 ];
 
+interface LinkedPlayer {
+  puuid: string;
+  gameName: string;
+  tagLine: string;
+}
+
+interface AuthStatus {
+  authenticated: boolean;
+  puuid?: string;
+  gameName?: string;
+  tagLine?: string;
+}
+
 export default function RSOAuthPage() {
   const router = useRouter();
-  const [connected, setConnected] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const searchParams = useSearchParams();
 
-  const handleConnect = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch("/api/valorant/auth/login");
-      const data = await res.json();
-      if (data.redirect_url) {
-        // For demo purposes, simulate success instead of redirecting
-        // In production: window.location.href = data.redirect_url;
-        setTimeout(() => {
-          setConnected(true);
-          setLoading(false);
-        }, 1500);
-      }
-    } catch {
-      setLoading(false);
+  const [authStatus, setAuthStatus] = useState<AuthStatus>({ authenticated: false });
+  const [linkedPlayers, setLinkedPlayers] = useState<LinkedPlayer[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [callbackStatus, setCallbackStatus] = useState<"success" | "error" | null>(null);
+  const [errorMessage, setErrorMessage] = useState("");
+
+  // Check URL params from OAuth callback redirect
+  useEffect(() => {
+    const status = searchParams.get("status");
+    if (status === "success") {
+      setCallbackStatus("success");
+    } else if (status === "error") {
+      setCallbackStatus("error");
+      setErrorMessage(searchParams.get("message") || "Authentication failed");
     }
+  }, [searchParams]);
+
+  // Check auth status and fetch linked players
+  useEffect(() => {
+    async function checkStatus() {
+      try {
+        const [statusRes, playersRes] = await Promise.all([
+          fetch(`${BACKEND_URL}/api/valorant/auth/status`, { credentials: "include" }),
+          fetch(`${BACKEND_URL}/api/valorant/auth/linked-players`),
+        ]);
+        if (statusRes.ok) {
+          const data = await statusRes.json();
+          setAuthStatus(data);
+        }
+        if (playersRes.ok) {
+          const data = await playersRes.json();
+          setLinkedPlayers(data.players || []);
+        }
+      } catch {
+        // Backend may not be running — that's ok for dev
+      } finally {
+        setLoading(false);
+      }
+    }
+    checkStatus();
+  }, [callbackStatus]);
+
+  const handleConnect = () => {
+    // Full page redirect to backend, which 302s to Riot
+    window.location.href = `${BACKEND_URL}/api/valorant/auth/login`;
   };
+
+  const handleLogout = () => {
+    // Full page redirect to backend logout
+    window.location.href = `${BACKEND_URL}/api/valorant/auth/logout`;
+  };
+
+  const isPlayerLinked = (ign: string) => {
+    return linkedPlayers.some(
+      (lp) => ign.toLowerCase().includes(lp.gameName.toLowerCase())
+    );
+  };
+
+  const isAuthenticated = authStatus.authenticated || callbackStatus === "success";
 
   return (
     <main style={styles.container}>
@@ -45,6 +101,18 @@ export default function RSOAuthPage() {
             Back to Stats
           </button>
         </div>
+
+        {/* Callback status banner */}
+        {callbackStatus === "success" && (
+          <div style={styles.successBanner}>
+            Riot account linked successfully!
+          </div>
+        )}
+        {callbackStatus === "error" && (
+          <div style={styles.errorBanner}>
+            Authentication failed: {errorMessage}
+          </div>
+        )}
 
         {/* Explanation */}
         <section style={styles.card}>
@@ -59,54 +127,72 @@ export default function RSOAuthPage() {
             <li>We never access account credentials or payment information</li>
             <li>You can revoke access at any time via your Riot account settings</li>
           </ul>
+          <p style={{ ...styles.text, marginTop: "0.75rem", opacity: 0.7, fontSize: "0.9rem" }}>
+            See our <a href="/privacy" style={{ color: "#60a5fa" }}>Privacy Policy</a> for full details.
+          </p>
         </section>
 
-        {/* Connect Button / Success State */}
+        {/* Connect / Status Section */}
         <section style={styles.card}>
-          {!connected ? (
+          {loading ? (
             <div style={styles.connectSection}>
-              <button
-                style={{
-                  ...styles.connectBtn,
-                  opacity: loading ? 0.7 : 1,
-                  cursor: loading ? "not-allowed" : "pointer",
-                }}
-                onClick={handleConnect}
-                disabled={loading}
-              >
-                {loading ? "Connecting..." : "Connect Your Riot Account"}
+              <p style={styles.hint}>Checking authentication status...</p>
+            </div>
+          ) : isAuthenticated ? (
+            <div style={styles.successSection}>
+              <div style={styles.checkmark}>&#10003;</div>
+              <h3 style={styles.successTitle}>Account Linked</h3>
+              {authStatus.gameName && (
+                <p style={styles.successText}>
+                  Signed in as <strong>{authStatus.gameName}#{authStatus.tagLine}</strong>
+                </p>
+              )}
+              <p style={styles.successText}>
+                Your CVAL stats will sync within 24 hours.
+              </p>
+              <button style={styles.logoutBtn} onClick={handleLogout}>
+                Disconnect Account
+              </button>
+            </div>
+          ) : (
+            <div style={styles.connectSection}>
+              <button style={styles.connectBtn} onClick={handleConnect}>
+                Sign in with Riot Games
               </button>
               <p style={styles.hint}>
                 You will be redirected to Riot Games to authorize access.
               </p>
             </div>
-          ) : (
-            <div style={styles.successSection}>
-              <div style={styles.checkmark}>&#10003;</div>
-              <h3 style={styles.successTitle}>Account Linked Successfully</h3>
-              <p style={styles.successText}>
-                Your CVAL stats will sync within 24 hours.
-              </p>
-            </div>
           )}
         </section>
 
-        {/* Connected Players (Demo) */}
+        {/* Connected Players */}
         <section style={styles.card}>
           <h2 style={styles.sectionTitle}>Connected Players</h2>
           <p style={styles.text}>
             CSU roster players with linked Riot accounts:
           </p>
           <div style={styles.rosterGrid}>
-            {CSU_ROSTER.map((player) => (
-              <div key={player.ign} style={styles.playerCard}>
-                <div style={styles.playerCheck}>&#10003;</div>
-                <div>
-                  <div style={styles.playerIGN}>{player.ign}</div>
-                  <div style={styles.playerMeta}>{player.role}</div>
+            {CSU_ROSTER.map((player) => {
+              const linked = isPlayerLinked(player.ign);
+              return (
+                <div key={player.ign} style={styles.playerCard}>
+                  <div style={{
+                    ...styles.playerCheck,
+                    background: linked ? "#16a34a" : "rgba(255,255,255,0.1)",
+                    color: linked ? "white" : "rgba(255,255,255,0.3)",
+                  }}>
+                    {linked ? "\u2713" : "?"}
+                  </div>
+                  <div>
+                    <div style={styles.playerIGN}>{player.ign}</div>
+                    <div style={styles.playerMeta}>
+                      {player.role} {linked ? "" : "- Not connected"}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </section>
       </div>
@@ -143,6 +229,26 @@ const styles: Record<string, CSSProperties> = {
     cursor: "pointer",
     background: "#2563eb",
     color: "white",
+  },
+  successBanner: {
+    padding: "1rem",
+    borderRadius: 12,
+    background: "rgba(22, 163, 74, 0.2)",
+    border: "1px solid rgba(22, 163, 74, 0.4)",
+    color: "#4ade80",
+    fontWeight: 600,
+    textAlign: "center" as const,
+    marginBottom: "1rem",
+  },
+  errorBanner: {
+    padding: "1rem",
+    borderRadius: 12,
+    background: "rgba(220, 38, 38, 0.2)",
+    border: "1px solid rgba(220, 38, 38, 0.4)",
+    color: "#f87171",
+    fontWeight: 600,
+    textAlign: "center" as const,
+    marginBottom: "1rem",
   },
   card: {
     border: "1px solid rgba(255,255,255,0.15)",
@@ -213,6 +319,16 @@ const styles: Record<string, CSSProperties> = {
     opacity: 0.85,
     marginTop: "0.5rem",
   },
+  logoutBtn: {
+    marginTop: "1rem",
+    padding: "0.6rem 1.2rem",
+    borderRadius: 10,
+    border: "1px solid rgba(255,255,255,0.2)",
+    cursor: "pointer",
+    background: "transparent",
+    color: "rgba(255,255,255,0.7)",
+    fontSize: "0.9rem",
+  },
   rosterGrid: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
@@ -232,8 +348,6 @@ const styles: Record<string, CSSProperties> = {
     width: 28,
     height: 28,
     borderRadius: "50%",
-    background: "#16a34a",
-    color: "white",
     fontSize: "0.9rem",
     display: "flex",
     alignItems: "center",

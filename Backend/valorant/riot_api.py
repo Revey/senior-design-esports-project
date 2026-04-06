@@ -23,6 +23,7 @@ from .config import (
     RIOT_VAL_BASE,
     RIOT_REGION,
 )
+from . import rso_store
 from .models import (
     PlayerProfile,
     MatchReference,
@@ -120,23 +121,16 @@ def get_match_list(puuid: str, size: int = 20) -> list[MatchReference]:
     ]
 
 
-def get_match(match_id: str) -> MatchSummary:
-    """
-    Fetch full match details and parse into a MatchSummary.
-    """
-    url = f"{RIOT_VAL_BASE}/val/match/v1/matches/{match_id}"
-    data = _get(url)
-
+def _parse_match(data: dict) -> MatchSummary:
+    """Parse raw Riot match response into a MatchSummary."""
     match_info = data["matchInfo"]
     teams = {t["teamId"]: t for t in data.get("teams", [])}
 
-    # Determine winning team
     winning_team = next(
         (tid for tid, t in teams.items() if t.get("won")),
         "Unknown",
     )
 
-    # Parse round results
     rounds = [
         RoundResult(
             roundNum=r["roundNum"],
@@ -148,7 +142,6 @@ def get_match(match_id: str) -> MatchSummary:
         for r in data.get("roundResults", [])
     ]
 
-    # Parse player stats
     players = []
     for p in data.get("players", []):
         stats = p.get("stats", {})
@@ -180,6 +173,13 @@ def get_match(match_id: str) -> MatchSummary:
         rounds=rounds,
         players=players,
     )
+
+
+def get_match(match_id: str) -> MatchSummary:
+    """Fetch full match details and parse into a MatchSummary."""
+    url = f"{RIOT_VAL_BASE}/val/match/v1/matches/{match_id}"
+    data = _get(url)
+    return _parse_match(data)
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +219,56 @@ def get_leaderboard(act_id: str, size: int = 200, start_index: int = 0) -> list[
     url = f"{RIOT_VAL_BASE}/val/ranked/v1/leaderboards/by-act/{act_id}"
     data = _get(url, params={"size": size, "startIndex": start_index})
     return data.get("players", [])
+
+
+# ---------------------------------------------------------------------------
+# RSO-authenticated requests (for custom game data)
+# ---------------------------------------------------------------------------
+
+def _get_with_rso(url: str, puuid: str, params: Optional[dict] = None, retries: int = 3) -> Any:
+    """Like _get but uses the player's RSO Bearer token instead of the dev API key."""
+    access_token = rso_store.refresh_if_expired(puuid)
+    if not access_token:
+        raise RuntimeError(f"No valid RSO token for player {puuid[:8]}")
+
+    headers = {"Authorization": f"Bearer {access_token}"}
+    for attempt in range(retries):
+        try:
+            resp = requests.get(url, headers=headers, params=params, timeout=10)
+            if resp.status_code == 429:
+                retry_after = int(resp.headers.get("Retry-After", 5))
+                logger.warning("Rate-limited (RSO). Waiting %ss…", retry_after)
+                time.sleep(retry_after)
+                continue
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.RequestException as exc:
+            logger.error("RSO API request failed (attempt %d/%d): %s", attempt + 1, retries, exc)
+            if attempt < retries - 1:
+                time.sleep(2 ** attempt)
+    raise RuntimeError(f"RSO API request failed after {retries} attempts: {url}")
+
+
+def get_match_list_rso(puuid: str, size: int = 20) -> list[MatchReference]:
+    """Fetch match list using the player's RSO token (includes custom games)."""
+    url = f"{RIOT_VAL_BASE}/val/match/v1/matchlists/by-puuid/{puuid}"
+    data = _get_with_rso(url, puuid)
+    history = data.get("history", [])[:size]
+    return [
+        MatchReference(
+            matchId=m["matchId"],
+            gameStartTimeMillis=m.get("gameStartTimeMillis"),
+            teamId=m.get("teamId"),
+        )
+        for m in history
+    ]
+
+
+def get_match_rso(match_id: str, puuid: str) -> MatchSummary:
+    """Fetch full match details using the player's RSO token."""
+    url = f"{RIOT_VAL_BASE}/val/match/v1/matches/{match_id}"
+    data = _get_with_rso(url, puuid)
+    return _parse_match(data)
 
 
 # ---------------------------------------------------------------------------
