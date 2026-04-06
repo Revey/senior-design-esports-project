@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, Suspense } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import type { CSSProperties } from "react";
 
 type MapInfo = { record: string; winRate: number };
@@ -40,13 +40,11 @@ type ValorantStats = {
   players: ValorantPlayer[];
 };
 
-type Tab = "Overall" | "NECC" | "CVAL" | "NACE";
+type Tab = "Overall" | "CVAL";
 
-const TABS: { label: Tab; color: string }[] = [
-  { label: "Overall", color: "#2563eb" },
-  { label: "NECC",    color: "#16a34a" },
-  { label: "CVAL",    color: "#ca8a04" },
-  { label: "NACE",    color: "#dc2626" },
+const TABS: { label: Tab; color: string; file: string }[] = [
+  { label: "Overall", color: "#2563eb", file: "CSUValGreen" },
+  { label: "CVAL",    color: "#ca8a04", file: "CSUValCval" },
 ];
 
 type KPIProps = { label: string; value: string | number };
@@ -62,29 +60,27 @@ function KPI({ label, value }: KPIProps) {
 
 function ValorantStatsContent() {
   const router = useRouter();
-  const params = useSearchParams();
-
-  const fileParam = params.get("file") ?? "CSUValGreen";
 
   const [activeTab, setActiveTab] = useState<Tab>("Overall");
   const [stats, setStats] = useState<ValorantStats | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const activeTabConfig = TABS.find((t) => t.label === activeTab)!;
+  const activeColor = activeTabConfig.color;
+  const activeFile = activeTabConfig.file;
+
   useEffect(() => {
     setStats(null);
     setError(null);
 
-    // All tabs currently point to the same JSON — swap per-tab files here later
-    fetch(`/teams/${fileParam}.json`)
+    fetch(`/teams/${activeFile}.json`)
       .then((res) => {
-        if (!res.ok) throw new Error(`Could not load /teams/${fileParam}.json (${res.status})`);
+        if (!res.ok) throw new Error(`Could not load /teams/${activeFile}.json (${res.status})`);
         return res.json() as Promise<ValorantStats>;
       })
       .then(setStats)
       .catch((err: Error) => setError(err.message));
-  }, [fileParam, activeTab]);
-
-  const activeColor = TABS.find((t) => t.label === activeTab)!.color;
+  }, [activeFile]);
 
   if (error) {
     return (
@@ -109,9 +105,14 @@ function ValorantStatsContent() {
             </p>
           )}
         </div>
-        <button style={styles.backBtn} onClick={() => router.push("/valorant")}>
-          Back
-        </button>
+        <div style={{ display: "flex", gap: "0.75rem" }}>
+          <button style={styles.rsoBtn} onClick={() => router.push("/valorant/auth")}>
+            Connect Riot Account
+          </button>
+          <button style={styles.backBtn} onClick={() => router.push("/valorant")}>
+            Back
+          </button>
+        </div>
       </div>
 
       {/* ── Tabs ─────────────────────────────────────── */}
@@ -233,6 +234,7 @@ const styles: Record<string, CSSProperties> = {
   title:        { fontSize: "2.2rem", margin: 0 },
   subtitle:     { marginTop: "0.35rem", opacity: 0.85 },
   backBtn:      { padding: "0.7rem 1rem", borderRadius: 12, border: "none", cursor: "pointer", background: "#2563eb", color: "white" },
+  rsoBtn:       { padding: "0.7rem 1rem", borderRadius: 12, border: "none", cursor: "pointer", background: "#dc2626", color: "white", fontWeight: 600 },
 
   tabRow:       { display: "flex", gap: "0.6rem", marginBottom: "1.25rem", flexWrap: "wrap" },
   tabBtn:       {

@@ -56,11 +56,10 @@ type LeagueStats = {
   teamWeaknesses: string[];
 };
 
-type Tab = "Overall" | "NECC" | "CLoL";
+type Tab = "Overall" | "CLoL";
 
 const TABS: { label: Tab; color: string; file: string }[] = [
   { label: "Overall", color: "#2563eb", file: "CSULol" },
-  { label: "NECC",    color: "#16a34a", file: "CSULolNecc" },
   { label: "CLoL",    color: "#dc2626", file: "CSULolClol" },
 ];
 

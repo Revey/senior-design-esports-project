@@ -18,6 +18,13 @@ Add/correct player gameName and tagLine there before running.
 
 NOTE: tracker.gg may block bots. If pages consistently fail to load stats,
 try setting HEADLESS = False below to watch the browser and diagnose.
+
+--- CHANGELOG (2026-04-05) ---
+Fixed two root causes of zero results:
+  1. WRONG URL: old code used /matches?playlist=custom
+     Correct URL is /customs?platform=pc
+  2. WRONG SELECTORS: tracker.gg redesigned their frontend.
+     All selectors updated to match the current v3 DOM structure.
 """
 
 import json
@@ -36,17 +43,17 @@ load_dotenv()
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-SCRIPT_DIR   = Path(__file__).resolve().parent
-ROSTER_FILE  = SCRIPT_DIR / "rosters" / "CSUValGreen.json"
+SCRIPT_DIR        = Path(__file__).resolve().parent
+ROSTER_FILE       = SCRIPT_DIR / "rosters" / "CSUValGreen.json"
 
-MONGO_URI            = os.getenv("MONGO_URI", "")
-MONGO_DB             = os.getenv("MONGO_DB", "senior_design_esports")
-CUSTOM_STATS_COLL    = "VAL_custom_stats"
+MONGO_URI             = os.getenv("MONGO_URI", "")
+MONGO_DB              = os.getenv("MONGO_DB", "senior_design_esports")
+CUSTOM_STATS_COLL     = "VAL_custom_stats"
 
 HEADLESS          = True    # Set False to watch the browser (useful for debugging)
-PAGE_TIMEOUT_MS   = 20_000
-WAIT_TIMEOUT_MS   = 15_000
-BETWEEN_PLAYERS_S = 3       # pause between players to avoid rate limiting
+PAGE_TIMEOUT_MS   = 30_000
+WAIT_TIMEOUT_MS   = 20_000
+BETWEEN_PLAYERS_S = 4       # pause between players to avoid rate limiting
 
 TRACKER_BASE = "https://tracker.gg/valorant/profile/riot"
 
@@ -54,10 +61,17 @@ TRACKER_BASE = "https://tracker.gg/valorant/profile/riot"
 # ── URL builder ───────────────────────────────────────────────────────────────
 
 def build_custom_url(game_name: str, tag_line: str) -> str:
+    """
+    Build the correct tracker.gg custom games URL.
+
+    FIXED: The old code used /matches?playlist=custom which no longer works.
+    The correct path is /customs?platform=pc
+    Example: https://tracker.gg/valorant/profile/riot/VIKES%20LIAN%23NUNG/customs?platform=pc
+    """
     import urllib.parse
     riot_id = f"{game_name}#{tag_line}"
     encoded = urllib.parse.quote(riot_id, safe="")
-    return f"{TRACKER_BASE}/{encoded}/matches?playlist=custom"
+    return f"{TRACKER_BASE}/{encoded}/customs?platform=pc"
 
 
 # ── Playwright scraper ────────────────────────────────────────────────────────
@@ -66,6 +80,9 @@ def scrape_custom_matches(page, game_name: str, tag_line: str) -> list[dict]:
     """
     Navigate to a player's custom matches page and extract match data.
     Returns a list of match dicts.
+
+    FIXED: Updated the wait selector and match selector to match tracker.gg's
+    current v3 DOM. Match rows are now: div.v3-match-row
     """
     url = build_custom_url(game_name, tag_line)
     print(f"    Loading: {url}")
@@ -76,26 +93,28 @@ def scrape_custom_matches(page, game_name: str, tag_line: str) -> list[dict]:
         print("    Page load timed out.")
         return []
 
-    # Wait for match cards to appear
-    match_selector = "div.match, article.match, .matches__match, [class*='Match__']"
+    # FIXED: old selector was "div.match, article.match, .matches__match, [class*='Match__']"
+    # New tracker.gg v3 uses: div.v3-match-row
+    match_selector = "div.v3-match-row"
+
     try:
         page.wait_for_selector(match_selector, timeout=WAIT_TIMEOUT_MS)
     except PlaywrightTimeoutError:
-        # Check if tracker.gg shows a "no matches" or "private profile" message
-        body_text = page.inner_text("body")[:500]
-        if "private" in body_text.lower():
+        body_text = page.inner_text("body")[:600]
+        body_lower = body_text.lower()
+        if "private" in body_lower:
             print("    Profile is private — no data available.")
-        elif "no matches" in body_text.lower() or "no results" in body_text.lower():
-            print("    No custom game matches found.")
+        elif "no matches" in body_lower or "no results" in body_lower or "no custom" in body_lower:
+            print("    No custom game matches found for this player.")
         else:
-            print("    Match cards did not load in time.")
-            print(f"    Page snippet: {body_text[:200]}")
+            print("    Match cards (div.v3-match-row) did not load in time.")
+            print(f"    Page snippet: {body_text[:300]}")
         return []
 
-    # Scroll down to load more matches (tracker.gg uses lazy loading)
-    for _ in range(3):
+    # Scroll to trigger lazy loading of additional match cards
+    for _ in range(4):
         page.evaluate("window.scrollBy(0, window.innerHeight)")
-        time.sleep(1)
+        time.sleep(1.0)
 
     match_elements = page.query_selector_all(match_selector)
     print(f"    Found {len(match_elements)} match card(s)")
@@ -114,108 +133,132 @@ def scrape_custom_matches(page, game_name: str, tag_line: str) -> list[dict]:
 
 def extract_match_data(el) -> dict | None:
     """
-    Extract stats from a single match card element.
-    Returns a dict or None if the card can't be parsed.
+    Extract stats from a single v3-match-row element.
+
+    FIXED: All selectors updated to match tracker.gg's current v3 DOM.
+    Inspected from live HTML on 2026-04-05.
+
+    Key selectors in the new DOM:
+      - Win/loss:    el has class 'v3-match-row--win' or 'v3-match-row--loss'
+      - Map name:    span.text-primary  (bold map name like "Split", "Breeze")
+      - Score:       span.text-valorant-team-1 and span.text-valorant-team-2
+      - Agent img:   img[alt] (first img in the row is always the agent)
+      - Stat name:   span.stat-name span.truncate  (e.g. "K/D", "ACS", "HS%")
+      - Stat value:  span.stat-value span.truncate  (the number)
+      - K/D/A list:  div.stat-list span.value  (three spans: kills / deaths / assists)
+      - Timestamp:   span[data-allow-mismatch]  (e.g. "2h ago")
     """
     data: dict = {}
 
-    # Result (Win / Loss / Draw)
-    for sel in [".result", ".match__result", "[class*='Result']", ".won", ".lost"]:
-        el2 = el.query_selector(sel)
-        if el2:
-            data["result"] = el2.inner_text(timeout=2000).strip()
-            break
+    # ── Win / Loss ────────────────────────────────────────────────────────────
+    try:
+        class_attr = el.get_attribute("class") or ""
+        if "v3-match-row--win" in class_attr:
+            data["result"] = "Win"
+        elif "v3-match-row--loss" in class_attr:
+            data["result"] = "Loss"
+        else:
+            data["result"] = "Unknown"
+    except Exception:
+        data["result"] = "Unknown"
 
-    # Map name
-    for sel in [".map", ".match__map", "[class*='Map']", "[data-map]"]:
-        el2 = el.query_selector(sel)
-        if el2:
-            data["map"] = el2.inner_text(timeout=2000).strip()
-            break
+    # ── Map name ──────────────────────────────────────────────────────────────
+    # The map is in a span with class "text-primary" containing bold text like "Split"
+    try:
+        map_el = el.query_selector("span.text-primary")
+        if map_el:
+            # Strip any nested chip text (e.g. "3rd") — get only direct text
+            raw = map_el.inner_text(timeout=2000).strip()
+            # The chip rank appears after a newline or space — take first token
+            data["map"] = raw.split("\n")[0].strip()
+    except Exception:
+        pass
 
-    # Agent
-    for sel in ["img[alt*='agent' i]", "img[alt*='Agent' i]", ".agent img", "[class*='Agent'] img"]:
-        el2 = el.query_selector(sel)
-        if el2:
-            data["agent"] = el2.get_attribute("alt") or ""
-            break
+    # ── Score ─────────────────────────────────────────────────────────────────
+    try:
+        team1 = el.query_selector("span.text-valorant-team-1")
+        team2 = el.query_selector("span.text-valorant-team-2")
+        if team1 and team2:
+            s1 = team1.inner_text(timeout=2000).strip()
+            s2 = team2.inner_text(timeout=2000).strip()
+            data["score"] = f"{s1}:{s2}"
+    except Exception:
+        pass
 
-    # Score (rounds like "13-7")
-    for sel in [".score", ".match__score", "[class*='Score']"]:
-        el2 = el.query_selector(sel)
-        if el2:
-            data["score"] = el2.inner_text(timeout=2000).strip()
-            break
+    # ── Agent ─────────────────────────────────────────────────────────────────
+    try:
+        agent_img = el.query_selector("img[alt]")
+        if agent_img:
+            data["agent"] = agent_img.get_attribute("alt") or ""
+    except Exception:
+        pass
 
-    # Date / time played
-    for sel in ["time", ".date", "[class*='Date']", "[datetime]"]:
-        el2 = el.query_selector(sel)
-        if el2:
-            data["played_at"] = el2.get_attribute("datetime") or el2.inner_text(timeout=2000).strip()
-            break
+    # ── Timestamp ─────────────────────────────────────────────────────────────
+    try:
+        time_el = el.query_selector("span[data-allow-mismatch]")
+        if time_el:
+            data["played_at"] = time_el.inner_text(timeout=2000).strip()
+    except Exception:
+        pass
 
-    # Stat blocks — tracker.gg renders these as labeled stat pairs
-    stat_blocks = el.query_selector_all("div.stat, [class*='Stat'], .match-stat")
-    for block in stat_blocks:
-        try:
-            label_el = block.query_selector("span.name, .stat__name, [class*='Label'], [class*='Name']")
-            value_el = block.query_selector("span.value, .stat__value, [class*='Value']")
-            if not label_el or not value_el:
-                continue
-            label = label_el.inner_text(timeout=2000).strip().lower()
-            value = value_el.inner_text(timeout=2000).strip().replace(",", "")
-            _parse_stat(label, value, data)
-        except Exception:
-            pass
+    # ── Named stats (K/D, ACS, HS%, DDΔ) ────────────────────────────────────
+    # Each stat block has a span.stat-name > span.truncate for the label
+    # and a span.stat-value > span.truncate for the value.
+    try:
+        stat_name_els = el.query_selector_all("span.stat-name span.truncate")
+        stat_value_els = el.query_selector_all("span.stat-value span.truncate")
 
-    # Alternative: inline stat text (some tracker.gg layouts use spans directly)
-    if not any(k in data for k in ("kills", "deaths", "ACS")):
-        all_spans = el.query_selector_all("span")
-        _try_parse_kda_spans(all_spans, data)
+        for name_el, value_el in zip(stat_name_els, stat_value_els):
+            label = name_el.inner_text(timeout=1500).strip().lower()
+            value_text = value_el.inner_text(timeout=1500).strip().replace(",", "")
+            _parse_stat(label, value_text, data)
+    except Exception:
+        pass
 
-    return data if len(data) > 1 else None
+    # ── K/D/A breakdown ───────────────────────────────────────────────────────
+    # The K/D/A values are in a div.stat-list containing three span.value elements
+    try:
+        kda_list = el.query_selector("div.stat-list")
+        if kda_list:
+            spans = kda_list.query_selector_all("span.value")
+            values = []
+            for sp in spans:
+                t = sp.inner_text(timeout=1500).strip()
+                if t:
+                    values.append(t)
+            if len(values) >= 3:
+                data["kills"]   = _safe_int(values[0])
+                data["deaths"]  = _safe_int(values[1])
+                data["assists"] = _safe_int(values[2])
+    except Exception:
+        pass
+
+    # Require at least map + result to count as a valid card
+    return data if len(data) >= 2 else None
 
 
 def _parse_stat(label: str, value: str, data: dict):
+    """Map a tracker.gg stat label to a data dict key."""
     try:
-        if "k/d" in label or "kd" in label:
+        if "k/d" == label or "kd" == label:
             data["KD"] = float(value)
-        elif label in ("kills", "k"):
-            data["kills"] = int(value)
-        elif label in ("deaths", "d"):
-            data["deaths"] = int(value)
-        elif label in ("assists", "a"):
-            data["assists"] = int(value)
-        elif "acs" in label or "combat score" in label:
+        elif label == "acs" or "combat score" in label:
             data["ACS"] = float(value)
-        elif "headshot" in label:
+        elif "hs%" in label or "headshot" in label:
             data["HSPercent"] = float(value.replace("%", ""))
-        elif "damage" in label and "delta" not in label:
+        elif "ddδ" in label or "damage delta" in label or label == "dd":
+            data["damageDelta"] = value  # keep as string, can be negative
+        elif "adr" in label or ("damage" in label and "delta" not in label and "ddδ" not in label):
             data["ADR"] = float(value)
-        elif "damage delta" in label or label == "dd":
-            data["damageDelta"] = value
     except (ValueError, TypeError):
         pass
 
 
-def _try_parse_kda_spans(spans, data: dict):
-    """Fallback: try to find K/D/A values from raw span text in the card."""
-    texts = []
-    for sp in spans:
-        try:
-            t = sp.inner_text(timeout=1000).strip()
-            if t and t.replace("/", "").replace(".", "").isdigit():
-                texts.append(t)
-        except Exception:
-            pass
-    # Common pattern: "kills / deaths / assists" appears as three consecutive integers
-    if len(texts) >= 3:
-        try:
-            data.setdefault("kills",   int(texts[0]))
-            data.setdefault("deaths",  int(texts[1]))
-            data.setdefault("assists", int(texts[2]))
-        except ValueError:
-            pass
+def _safe_int(val: str) -> int:
+    try:
+        return int(val.strip())
+    except (ValueError, TypeError):
+        return 0
 
 
 # ── Aggregation ───────────────────────────────────────────────────────────────
@@ -225,42 +268,49 @@ def aggregate_matches(matches: list[dict]) -> dict:
     if not matches:
         return {}
 
-    total_matches = len(matches)
-    wins = sum(1 for m in matches if "win" in m.get("result", "").lower())
+    wins   = sum(1 for m in matches if m.get("result") == "Win")
+    losses = sum(1 for m in matches if m.get("result") == "Loss")
+    total  = len(matches)
 
-    kills   = sum(m.get("kills",   0) for m in matches)
-    deaths  = sum(m.get("deaths",  0) for m in matches)
-    assists = sum(m.get("assists", 0) for m in matches)
-
-    acs_vals = [m["ACS"]       for m in matches if "ACS"       in m]
-    hs_vals  = [m["HSPercent"] for m in matches if "HSPercent" in m]
-    adr_vals = [m["ADR"]       for m in matches if "ADR"       in m]
+    def avg(key: str) -> float:
+        vals = [m[key] for m in matches if key in m and m[key] is not None]
+        return round(sum(vals) / len(vals), 2) if vals else 0.0
 
     return {
-        "matches_played":  total_matches,
-        "wins":            wins,
-        "losses":          total_matches - wins,
-        "win_rate":        round(wins / total_matches * 100, 1) if total_matches else 0,
-        "total_kills":     kills,
-        "total_deaths":    deaths,
-        "total_assists":   assists,
-        "KD":              round(kills / max(deaths, 1), 2),
-        "avg_ACS":         round(sum(acs_vals) / len(acs_vals), 1) if acs_vals else None,
-        "avg_HSPercent":   round(sum(hs_vals)  / len(hs_vals),  1) if hs_vals  else None,
-        "avg_ADR":         round(sum(adr_vals) / len(adr_vals), 1) if adr_vals else None,
+        "totalMatches": total,
+        "wins":         wins,
+        "losses":       losses,
+        "winRate":      round(wins / total * 100, 1) if total else 0.0,
+        "avgKD":        avg("KD"),
+        "avgACS":       avg("ACS"),
+        "avgHSPercent": avg("HSPercent"),
+        "avgADR":       avg("ADR"),
+        "avgKills":     avg("kills"),
+        "avgDeaths":    avg("deaths"),
+        "avgAssists":   avg("assists"),
     }
 
 
 # ── MongoDB ───────────────────────────────────────────────────────────────────
 
-def get_mongo_collection():
-    if not MONGO_URI:
-        raise ValueError("Missing MONGO_URI in .env")
-    client = MongoClient(MONGO_URI, tls=True, tlsCAFile=certifi.where())
-    db     = client[MONGO_DB]
-    coll   = db[CUSTOM_STATS_COLL]
-    coll.create_index("riot_id", unique=True)
-    return client, coll
+def upsert_player_stats(db, player_name: str, riot_id: str,
+                        matches: list[dict], aggregates: dict) -> None:
+    doc = {
+        "riot_id":    riot_id,
+        "player_name": player_name,
+        "scraped_at": datetime.now(timezone.utc),
+        "matches":    matches,
+        "aggregates": aggregates,
+    }
+    try:
+        db[CUSTOM_STATS_COLL].update_one(
+            {"riot_id": riot_id},
+            {"$set": doc},
+            upsert=True,
+        )
+        print(f"    Saved to MongoDB: {riot_id}")
+    except PyMongoError as e:
+        print(f"    MongoDB error for {riot_id}: {e}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -270,41 +320,36 @@ def main():
     print("CSU Valorant — Custom Games Scraper (tracker.gg)")
     print("=" * 72)
 
+    # Load roster
     if not ROSTER_FILE.exists():
         print(f"ERROR: Roster file not found: {ROSTER_FILE}")
         return
 
-    with ROSTER_FILE.open(encoding="utf-8") as f:
-        roster = json.load(f)
+    with open(ROSTER_FILE) as f:
+        roster_data = json.load(f)
 
-    players  = roster.get("players", [])
-    team_name = roster.get("teamName", "CSU Vikes Green")
+    # Support both {"players": [...]} and bare list formats
+    players = roster_data.get("players", roster_data) if isinstance(roster_data, dict) else roster_data
+    team_name = roster_data.get("teamName", "CSU Vikes Green") if isinstance(roster_data, dict) else "CSU Vikes Green"
 
     print(f"\nTeam: {team_name}")
-    print(f"Players: {len(players)}")
+    print(f"Players: {len(players)}\n")
 
-    if not players:
-        print("No players in roster.")
-        return
-
-    # Set up MongoDB
-    mongo_client, collection = None, None
-    use_mongo = bool(MONGO_URI)
-    if use_mongo:
+    # MongoDB connection (optional — results also printed to console)
+    db = None
+    if MONGO_URI:
         try:
-            mongo_client, collection = get_mongo_collection()
-            print(f"MongoDB: {MONGO_DB}.{CUSTOM_STATS_COLL}")
+            client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
+            db = client[MONGO_DB]
+            db.command("ping")
+            print("MongoDB connected.\n")
         except Exception as e:
-            print(f"MongoDB connection failed: {e} — results will only be printed.")
-            use_mongo = False
+            print(f"MongoDB connection failed (will still print results): {e}\n")
 
     all_results = []
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(
-            headless=HEADLESS,
-            args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-        )
+        browser = pw.chromium.launch(headless=HEADLESS)
         context = browser.new_context(
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -315,73 +360,68 @@ def main():
         )
         page = context.new_page()
 
-        for i, player in enumerate(players, 1):
-            game_name = player.get("gameName", "")
-            tag_line  = player.get("tagLine",  "")
-            role      = player.get("role", "")
+        for idx, player in enumerate(players, 1):
+            game_name = player.get("gameName") or player.get("game_name", "")
+            tag_line  = player.get("tagLine")  or player.get("tag_line", "")
+            name      = player.get("name", f"{game_name}#{tag_line}")
+            role      = player.get("role", "Unknown")
             riot_id   = f"{game_name}#{tag_line}"
 
             if not game_name or not tag_line:
-                print(f"\n[{i}/{len(players)}] Skipping — missing gameName or tagLine: {player}")
+                print(f"[{idx}/{len(players)}] Skipping {name} — missing Riot ID")
                 continue
 
-            print(f"\n[{i}/{len(players)}] {riot_id}  ({role})")
+            print(f"[{idx}/{len(players)}] {riot_id}  ({role})")
 
             matches   = scrape_custom_matches(page, game_name, tag_line)
-            aggregate = aggregate_matches(matches)
+            aggregates = aggregate_matches(matches)
 
-            result_doc = {
-                "riot_id":       riot_id,
-                "game_name":     game_name,
-                "tag_line":      tag_line,
-                "team_name":     team_name,
-                "role":          role,
-                "custom_matches": matches,
-                "aggregate":     aggregate,
-                "scrape_status": "OK" if matches else "NO_DATA",
-                "updated_at_utc": datetime.now(timezone.utc).isoformat(),
-            }
-
-            all_results.append(result_doc)
-
-            if aggregate:
-                print(f"    Matches: {aggregate['matches_played']}  "
-                      f"Win%: {aggregate['win_rate']}%  "
-                      f"KD: {aggregate['KD']}  "
-                      f"ACS: {aggregate.get('avg_ACS', 'N/A')}")
+            if aggregates:
+                print(f"    {aggregates['totalMatches']} matches | "
+                      f"W{aggregates['wins']}-L{aggregates['losses']} | "
+                      f"KD {aggregates['avgKD']} | ACS {aggregates['avgACS']}")
             else:
                 print("    No aggregate stats computed.")
 
-            if use_mongo and collection is not None:
-                try:
-                    collection.replace_one({"riot_id": riot_id}, result_doc, upsert=True)
-                    print("    Saved to MongoDB.")
-                except PyMongoError as e:
-                    print(f"    MongoDB error: {e}")
+            result_entry = {
+                "name":       name,
+                "riot_id":    riot_id,
+                "role":       role,
+                "matches":    matches,
+                "aggregates": aggregates,
+            }
+            all_results.append(result_entry)
 
-            if i < len(players):
+            if db is not None and matches:
+                upsert_player_stats(db, name, riot_id, matches, aggregates)
+
+            if idx < len(players):
                 time.sleep(BETWEEN_PLAYERS_S)
 
+        page.close()
+        context.close()
         browser.close()
 
-    # Print summary
-    print(f"\n{'='*72}")
+    # Always write a local JSON backup regardless of MongoDB
+    out_file = SCRIPT_DIR / "custom_games_results.json"
+    with open(out_file, "w") as f:
+        json.dump(all_results, f, indent=2, default=str)
+    print(f"\nResults saved to {out_file}")
+
+    # Summary
+    print("\n" + "=" * 72)
     print("SUMMARY")
-    print(f"{'='*72}")
+    print("=" * 72)
     for r in all_results:
-        agg = r.get("aggregate", {})
-        print(f"  {r['riot_id']:<35} "
-              f"{agg.get('matches_played', 0):>3} matches  "
-              f"KD: {agg.get('KD', 'N/A')}")
-
-    # Also save raw results to a local JSON for inspection
-    out_file = SCRIPT_DIR / "csu_custom_games.json"
-    with out_file.open("w", encoding="utf-8") as f:
-        json.dump(all_results, f, indent=2)
-    print(f"\nRaw results saved to {out_file.name}")
-
-    if mongo_client:
-        mongo_client.close()
+        agg = r.get("aggregates", {})
+        if agg:
+            print(f"  {r['riot_id']:30s}  "
+                  f"{agg.get('totalMatches', 0):2d} matches  "
+                  f"W{agg.get('wins', 0)}-L{agg.get('losses', 0)}  "
+                  f"KD {agg.get('avgKD', 0.0):.2f}  "
+                  f"ACS {agg.get('avgACS', 0.0):.0f}")
+        else:
+            print(f"  {r['riot_id']:30s}  no data")
 
 
 if __name__ == "__main__":

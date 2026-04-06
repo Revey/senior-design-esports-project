@@ -1,0 +1,33 @@
+{
+  "team": {
+    "name": "CSU Vikes Green",
+    "game": "Valorant",
+    "season": "Spring 2026 - CVAL",
+    "overallRecord": "12-5",
+    "winRate": 70.6,
+    "roundWinRate": 53.1,
+    "pistolRoundWinRate": 58.4,
+    "attackWinRate": 51.2,
+    "defenseWinRate": 55.0,
+    "averageTeamACS": 208.7,
+    "averageTeamKD": 1.05,
+    "averageHSPercent": 23.9,
+    "averageDamageDelta": "+6.1",
+    "bestMap": "Ascent",
+    "worstMap": "Icebox",
+    "mapPool": {
+      "Ascent": { "record": "4-1", "winRate": 80.0 },
+      "Bind":   { "record": "3-1", "winRate": 75.0 },
+      "Haven":  { "record": "2-1", "winRate": 66.7 },
+      "Split":  { "record": "2-1", "winRate": 66.7 },
+      "Icebox": { "record": "1-1", "winRate": 50.0 }
+    }
+  },
+  "players": [
+    { "name": "VIKES Lian",        "role": "Smokes",    "KD": 1.00, "ACS": 195.2, "HSPercent": 21.8, "ADR": 132.1, "damageDelta": "+3.9" },
+    { "name": "VIKES N0ths",       "role": "Initiator", "KD": 1.03, "ACS": 201.4, "HSPercent": 23.1, "ADR": 140.2, "damageDelta": "+5.5" },
+    { "name": "VIKES Kamino",      "role": "Flex",      "KD": 1.08, "ACS": 216.3, "HSPercent": 25.2, "ADR": 145.7, "damageDelta": "+8.2" },
+    { "name": "VIKES wyyu",        "role": "Duelist",   "KD": 1.18, "ACS": 241.6, "HSPercent": 26.9, "ADR": 158.4, "damageDelta": "+12.7" },
+    { "name": "VIKES Exquisitely", "role": "Sentinel",  "KD": 1.01, "ACS": 189.0, "HSPercent": 23.2, "ADR": 127.8, "damageDelta": "+2.8" }
+  ]
+}

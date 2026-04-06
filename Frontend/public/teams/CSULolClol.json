@@ -1,0 +1,54 @@
+{
+  "team": {
+    "name": "CSU Vikes Green",
+    "game": "League of Legends",
+    "season": "Spring 2026 - CLOL Championship",
+    "region": "Collegiate Midwest",
+    "overallRecord": "11-5",
+    "winRate": 68.8,
+    "averageGameTime": "31:15",
+    "goldDifferenceAt15": 980,
+    "firstBloodRate": 62,
+    "firstTowerRate": 56,
+    "dragonControlRate": 58,
+    "heraldControlRate": 61,
+    "baronControlRate": 64,
+    "earlyGameRating": 8.1,
+    "midGameRating": 7.5,
+    "lateGameRating": 8.3,
+    "teamKDA": 2.95,
+    "averageKillsPerGame": 14.2,
+    "averageDeathsPerGame": 9.8,
+    "averageGoldPerMinute": 1790,
+    "averageVisionScorePerMinute": 3.2,
+    "preferredPlaystyle": "Controlled early game with strong teamfight execution",
+    "bestSide": "Blue",
+    "worstSide": "Red"
+  },
+  "players": [
+    { "name": "VIKES Top",     "role": "Top",     "championPool": ["Aatrox", "Renekton", "Gnar"],           "gamesPlayed": 16, "KDA": 2.7 },
+    { "name": "VIKES Jungle",  "role": "Jungle",  "championPool": ["Lee Sin", "Viego", "Sejuani"],          "gamesPlayed": 16, "KDA": 3.5 },
+    { "name": "VIKES Mid",     "role": "Mid",     "championPool": ["Orianna", "Ahri", "Syndra"],            "gamesPlayed": 16, "KDA": 3.9 },
+    { "name": "VIKES ADC",     "role": "ADC",     "championPool": ["Jinx", "Aphelios", "Kai'Sa"],           "gamesPlayed": 16, "KDA": 4.2 },
+    { "name": "VIKES Support", "role": "Support", "championPool": ["Nautilus", "Thresh", "Rakan"],          "gamesPlayed": 16, "KDA": 4.5 }
+  ],
+  "draftTrends": {
+    "mostBannedAgainst": ["Orianna", "Jinx"],
+    "flexPickRate": 15,
+    "redSideCounterPickWinRate": 71,
+    "averageDraftAdaptabilityRating": 7.9,
+    "earlyGameCompWinRate": 65,
+    "scalingCompWinRate": 70
+  },
+  "teamStrengths": [
+    "Consistent dragon control",
+    "Strong mid-jungle coordination",
+    "Reliable late game teamfighting",
+    "Good Baron setup and execution"
+  ],
+  "teamWeaknesses": [
+    "Sometimes overaggressive in early skirmishes",
+    "Top lane can be isolated against dive comps",
+    "Difficulty handling split-push strategies"
+  ]
+}

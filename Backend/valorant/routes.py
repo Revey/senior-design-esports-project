@@ -17,7 +17,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pymongo import MongoClient
 
 from . import riot_api, tracker_scraper
-from .config import MONGO_URI, MONGO_DB, VAL_COLLECTION, VAL_STATS_COLLECTION
+from .config import MONGO_URI, MONGO_DB
 from .data_builder import build_team_payload
 from .models import ValorantTeamPayload, PlayerProfile
 
@@ -140,42 +140,21 @@ def get_team(
     """
     Build and return a full team payload for the frontend.
 
-    Checks MongoDB VAL collection first, then falls back to a static roster file.
+    Loads team data from a static roster file.
 
     Example: GET /api/valorant/team/CSUValGreen
     """
     cache_key = f"team:{team_id}:{use_riot}:{use_scraper}:{num_matches}"
 
     def _build():
-        team_doc = None
-
-        # Try MongoDB first
-        db = _get_db()
-        if db is not None:
-            team_doc = db[VAL_COLLECTION].find_one(
-                {"team_name": {"$regex": team_id, "$options": "i"}},
-                {"_id": 0},
+        roster_file = ROSTERS_DIR / f"{team_id}.json"
+        if not roster_file.exists():
+            raise HTTPException(
+                status_code=404,
+                detail=f"Team not found in roster files: {team_id}",
             )
-
-        # Fall back to static roster file
-        if team_doc is None:
-            roster_file = ROSTERS_DIR / f"{team_id}.json"
-            if not roster_file.exists():
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Team not found in MongoDB or roster files: {team_id}",
-                )
-            with open(roster_file) as f:
-                team_doc = json.load(f)
-
-        # Enrich each player with stored stats from VAL_player_stats if available
-        if db is not None:
-            for player in team_doc.get("players", []):
-                riot_id  = player.get("riot_id") or f"{player.get('game_name','')}#{player.get('tag_line','')}"
-                stats_doc = db[VAL_STATS_COLLECTION].find_one({"riot_id": riot_id}, {"_id": 0})
-                if stats_doc:
-                    stored = stats_doc.get("tracker_stats") or stats_doc.get("riot_stats") or {}
-                    player.update({k: v for k, v in stored.items() if k not in player})
+        with open(roster_file) as f:
+            team_doc = json.load(f)
 
         return build_team_payload(
             team_doc,
@@ -190,20 +169,8 @@ def get_team(
 @router.get("/teams")
 def list_teams():
     """
-    List all available teams.
-
-    Returns teams from MongoDB VAL collection if available,
-    otherwise falls back to static roster files.
+    List all available teams from static roster files.
     """
-    db = _get_db()
-    if db is not None:
-        teams = list(
-            db[VAL_COLLECTION].find({}, {"_id": 0, "team_name": 1, "school": 1, "logo_url": 1})
-        )
-        if teams:
-            return {"teams": teams}
-
-    # Fallback: static roster files
     if not ROSTERS_DIR.exists():
         return {"teams": []}
     return {"teams": [f.stem for f in ROSTERS_DIR.glob("*.json")]}
@@ -243,3 +210,41 @@ def get_leaderboard(
         return {"actId": act_id, "players": players}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# RSO (Riot Sign On) endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/auth/login")
+def rso_login():
+    """
+    Redirect to Riot's OAuth authorization URL.
+    Uses placeholder client_id for demo — this shows Riot the intended flow.
+    """
+    riot_auth_url = (
+        "https://auth.riotgames.com/authorize"
+        "?response_type=code"
+        "&client_id=YOUR_CLIENT_ID_PLACEHOLDER"
+        "&redirect_uri=https://esports.csuohio.edu/api/valorant/auth/callback"
+        "&scope=openid+offline_access"
+    )
+    return {"redirect_url": riot_auth_url}
+
+
+@router.get("/auth/callback")
+def rso_callback(code: str = None, error: str = None):
+    """
+    Handle the OAuth callback from Riot.
+    In production this exchanges the code for tokens.
+    For demo: simulate success.
+    """
+    if error or not code:
+        return {"status": "error", "message": error or "No code returned"}
+    # In production this exchanges the code for tokens
+    # For demo: simulate success
+    return {
+        "status": "success",
+        "message": "Riot account linked successfully",
+        "scope": "match_history_custom_games"
+    }
