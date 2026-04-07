@@ -11,6 +11,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from valorant.config import FRONTEND_ORIGIN
 from valorant.routes import router as valorant_router
+from core.leagues_router import router as leagues_router
+from core.tournaments_router import router as tournaments_router
+from core.teams_router import router as teams_router
+from core.players_router import router as players_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,6 +41,10 @@ app.add_middleware(
 )
 
 app.include_router(valorant_router, prefix="/api/valorant")
+app.include_router(leagues_router, prefix="/api/leagues")
+app.include_router(tournaments_router, prefix="/api/tournaments")
+app.include_router(teams_router, prefix="/api/teams")
+app.include_router(players_router, prefix="/api/players")
 
 
 @app.get("/")

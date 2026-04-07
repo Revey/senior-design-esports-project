@@ -22,3 +22,16 @@ build/
 
 # Claude Code
 .claude/
+.mcp.json
+CLAUDE.md
+
+# Dev/seed scripts
+Backend/seed_data.py
+Backend/mcp_server/
+
+# Test files
+test.txt
+
+# Python
+__pycache__/
+*.pyc
