@@ -11,7 +11,7 @@ export default function Footer() {
       lineHeight: 1.6,
     }}>
       <p>
-        CSU Esports Hub is not affiliated with or sponsored by Riot Games, Inc. or VALORANT Esports.
+        CollegeRankers is not affiliated with or sponsored by Riot Games, Inc. or VALORANT Esports.
         VALORANT and League of Legends are trademarks of Riot Games, Inc.
       </p>
       <p style={{ marginTop: "0.25rem" }}>

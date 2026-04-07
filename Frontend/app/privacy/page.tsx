@@ -10,7 +10,7 @@ export default function PrivacyPolicyPage() {
         <section style={styles.card}>
           <h2 style={styles.sectionTitle}>Overview</h2>
           <p style={styles.text}>
-            CSU Esports Hub (&quot;we&quot;, &quot;our&quot;, &quot;the platform&quot;) is a collegiate
+            CollegeRankers (&quot;we&quot;, &quot;our&quot;, &quot;the platform&quot;) is a collegiate
             esports analytics tool built by students at Cleveland State University. This privacy
             policy explains how we collect, use, and protect data obtained through our integration
             with the Riot Games API and Riot Sign On (RSO).

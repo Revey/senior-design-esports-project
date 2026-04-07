@@ -3,6 +3,7 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  --navbar-height: 60px;
 }
 
 @theme inline {
@@ -23,6 +24,10 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+
+  /* Push all page content below the fixed navbar globally —
+     no need to touch individual pages */
+  padding-top: var(--navbar-height);
 }
 
 /* card hover effects */
@@ -47,112 +52,128 @@ button[data-card]:focus-visible {
 }
 
 /* ========================= */
-/* NEW SLIDE MENU NAVBAR */
+/* HORIZONTAL STICKY NAVBAR  */
 /* ========================= */
 
-.menu-header {
+.site-navbar {
   position: fixed;
   top: 0;
   left: 0;
   width: 100%;
+  height: var(--navbar-height);
   z-index: 1100;
 
   display: flex;
   align-items: center;
-  justify-content: space-between;
 
-  padding: 28px 42px;
-  background: transparent;
-}
+  padding: 0 24px;
 
-.menu-toggle {
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 0;
-}
+  background: rgba(10, 10, 18, 0.82);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
 
-.menu-toggle span {
-  display: block;
-  width: 26px;
-  height: 3px;
-  background: white;
-  border-radius: 999px;
-}
-
-.menu-brand {
-  color: white;
-  text-decoration: none;
-  font-size: 1.75rem;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-}
-
-.menu-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.45);
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity 0.3s ease, visibility 0.3s ease;
-  z-index: 1190;
-}
-
-.menu-overlay.show {
   opacity: 1;
-  visibility: visible;
+  transform: translateY(0);
+  transition: opacity 0.4s ease, transform 0.4s ease;
 }
 
-.side-menu {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 320px;
-  max-width: 85vw;
-  height: 100vh;
-  background: white;
-  z-index: 1200;
-
-  transform: translateX(-100%);
-  transition: transform 0.3s ease;
-
-  padding: 36px 32px;
-  box-shadow: 0 0 30px rgba(0, 0, 0, 0.2);
+.site-navbar.navbar-hidden {
+  opacity: 0;
+  transform: translateY(-100%);
+  pointer-events: none;
 }
 
-.side-menu.open {
-  transform: translateX(0);
-}
-
-.close-menu {
-  background: transparent;
-  border: none;
-  font-size: 2.25rem;
-  line-height: 1;
-  cursor: pointer;
-  color: #222;
-  display: block;
-  margin-left: auto;
-  margin-bottom: 28px;
-}
-
-.side-menu-nav {
+/* ---- Logo: stays left ---- */
+.navbar-logo-link {
   display: flex;
-  flex-direction: column;
-  gap: 24px;
-}
-
-.side-menu-link {
+  align-items: center;
+  flex-shrink: 0;
   text-decoration: none;
-  color: #222;
-  font-size: 1.9rem;
-  font-weight: 400;
-  transition: color 0.2s ease;
+  z-index: 2;
 }
 
-.side-menu-link:hover {
-  color: #2563eb;
+/* ---- Links: truly centered in the full navbar width ---- */
+.navbar-links {
+  position: absolute;
+  left: 0;
+  right: 0;
+  width: 100%;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+
+  /* Don't capture clicks behind the logo or Connect Riot button */
+  pointer-events: none;
+}
+
+/* Re-enable clicks on the links themselves */
+.navbar-links a {
+  pointer-events: auto;
+}
+
+.navbar-link {
+  text-decoration: none;
+  color: rgba(255, 255, 255, 0.72);
+
+  font-family: var(--font-geist-sans), 'Segoe UI', system-ui, sans-serif;
+  font-size: 0.9rem;
+  font-weight: 500;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+
+  padding: 6px 16px;
+  border-radius: 6px;
+  transition: color 0.2s ease, background 0.2s ease;
+  white-space: nowrap;
+}
+
+.navbar-link:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.09);
+}
+
+/* "Connect Riot" — pinned to the right edge of the navbar */
+.navbar-link[href="/valorant/auth"] {
+  /* Pull it out of the centered group and pin it right */
+  position: absolute;
+  right: 24px;
+
+  color: #ff4655;
+  border: 1px solid rgba(255, 70, 85, 0.35);
+  pointer-events: auto;
+}
+
+.navbar-link[href="/valorant/auth"]:hover {
+  background: rgba(255, 70, 85, 0.12);
+  color: #ff7a85;
+}
+
+/* ---- Mobile ---- */
+@media (max-width: 768px) {
+  .navbar-links {
+    position: static;
+    justify-content: flex-start;
+    flex: 1;
+    margin-left: 16px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    pointer-events: auto;
+  }
+
+  .navbar-links::-webkit-scrollbar {
+    display: none;
+  }
+
+  .navbar-link {
+    font-size: 0.78rem;
+    padding: 5px 10px;
+    letter-spacing: 0.4px;
+  }
+
+  .navbar-link[href="/valorant/auth"] {
+    position: static;
+  }
 }

@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef } from "react";
 import Link from "next/link";
+import Image from "next/image";
 
 const navItems = [
   { label: "Leagues", href: "/leagues" },
@@ -13,53 +14,54 @@ const navItems = [
 ];
 
 export default function Navbar() {
-  const [menuOpen, setMenuOpen] = useState(false);
+  const headerRef = useRef<HTMLElement>(null);
+  const lastScrollY = useRef(0);
+
+  useEffect(() => {
+    const header = headerRef.current;
+    if (!header) return;
+
+    const handleScroll = () => {
+      const currentScrollY = window.scrollY;
+
+      if (currentScrollY < 60) {
+        header.classList.remove("navbar-hidden");
+      } else if (currentScrollY > lastScrollY.current) {
+        // Scrolling down — hide
+        header.classList.add("navbar-hidden");
+      } else {
+        // Scrolling up — show
+        header.classList.remove("navbar-hidden");
+      }
+
+      lastScrollY.current = currentScrollY;
+    };
+
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
 
   return (
-    <>
-      <header className="menu-header">
-        <button
-          className="menu-toggle"
-          onClick={() => setMenuOpen(true)}
-          aria-label="Open menu"
-        >
-          <span />
-          <span />
-          <span />
-        </button>
+    <header ref={headerRef} className="site-navbar">
+      {/* Logo — pinned to the left */}
+      <Link href="/" className="navbar-logo-link" aria-label="Home">
+        <Image
+          src="/images/collegerankericonwhite.png"
+          alt="CollegeEsportsTracker logo"
+          width={38}
+          height={38}
+          priority
+        />
+      </Link>
 
-        <Link href="/" className="menu-brand">
-          CollegeEsportsTracker
-        </Link>
-      </header>
-
-      <div
-        className={`menu-overlay ${menuOpen ? "show" : ""}`}
-        onClick={() => setMenuOpen(false)}
-      />
-
-      <aside className={`side-menu ${menuOpen ? "open" : ""}`}>
-        <button
-          className="close-menu"
-          onClick={() => setMenuOpen(false)}
-          aria-label="Close menu"
-        >
-          ×
-        </button>
-
-        <nav className="side-menu-nav">
-          {navItems.map((item) => (
-            <Link
-              key={item.label}
-              href={item.href}
-              className="side-menu-link"
-              onClick={() => setMenuOpen(false)}
-            >
-              {item.label}
-            </Link>
-          ))}
-        </nav>
-      </aside>
-    </>
+      {/* Nav links — absolutely centered in the bar */}
+      <nav className="navbar-links" aria-label="Main navigation">
+        {navItems.map((item) => (
+          <Link key={item.label} href={item.href} className="navbar-link">
+            {item.label}
+          </Link>
+        ))}
+      </nav>
+    </header>
   );
 }
