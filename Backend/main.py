@@ -30,11 +30,8 @@ app = FastAPI(
 # Allow the Next.js dev server and any future frontend origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3001",
-        FRONTEND_ORIGIN,
-    ],
+    allow_origins=[o.strip() for o in FRONTEND_ORIGIN.split(",") if o.strip()]
+    + ["http://localhost:3000", "http://localhost:3001"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
