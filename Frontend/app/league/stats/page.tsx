@@ -1,317 +1,478 @@
 "use client";
 
+import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState, Suspense } from "react";
 import type { CSSProperties } from "react";
 
-type Team = {
-  name: string;
-  game: string;
-  season: string;
-  region: string;
-  overallRecord: string;
-  winRate: number;
-  averageGameTime: string;
-  goldDifferenceAt15: number;
-  firstBloodRate: number;
-  firstTowerRate: number;
-  dragonControlRate: number;
-  heraldControlRate: number;
-  baronControlRate: number;
-  earlyGameRating: number;
-  midGameRating: number;
-  lateGameRating: number;
-  teamKDA: number;
-  averageKillsPerGame: number;
-  averageDeathsPerGame: number;
-  averageGoldPerMinute: number;
-  averageVisionScorePerMinute: number;
-  preferredPlaystyle: string;
-  bestSide: string;
-  worstSide: string;
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL;
+
+type RankInfo = {
+  tier_text: string | null;
+  lp: number | null;
+  wins: number | null;
+  losses: number | null;
+  win_rate: number | null;
+} | null;
+
+type RoleInfo = {
+  role: string;
+  percentage: number;
+};
+
+type MasteryInfo = {
+  champion: string;
+  champion_id: number | null;
+  mastery_level: number | null;
+  mastery_points: number | null;
 };
 
 type Player = {
-  name: string;
-  role: string;
-  championPool: string[];
-  gamesPlayed: number;
-  KDA: number;
+  _id?: string;
+  team_name: string | null;
+  school: string | null;
+  display_name: string | null;
+  team_role_from_clol: string | null;
+  riot_id: string | null;
+  game_name: string | null;
+  tag_line: string | null;
+  puuid: string | null;
+  updated_at_utc: string | null;
+  scrape_status: string | null;
+  source: string | null;
+  opgg_url: string | null;
+  summoner_name: string | null;
+  ladder_rank: number | null;
+  error?: string | null;
+  solo_duo_rank: RankInfo;
+  highest_rank: {
+    tier_text: string | null;
+    lp: number | null;
+  } | null;
+  flex_rank: RankInfo;
+  top_roles: RoleInfo[];
+  main_role: string | null;
+  top_5_masteries: MasteryInfo[];
 };
 
-type DraftTrends = {
-  mostBannedAgainst: string[];
-  flexPickRate: number;
-  redSideCounterPickWinRate: number;
-  averageDraftAdaptabilityRating: number;
-  earlyGameCompWinRate: number;
-  scalingCompWinRate: number;
-};
-
-type LeagueStats = {
-  team: Team;
+type ApiResponse = {
+  ok: boolean;
+  team: string;
+  count: number;
   players: Player[];
-  draftTrends: DraftTrends;
-  teamStrengths: string[];
-  teamWeaknesses: string[];
+  error?: string;
 };
 
-type Tab = "Overall" | "CLoL";
+function safeText(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "Not found";
+  return String(value);
+}
 
-const TABS: { label: Tab; color: string; file: string }[] = [
-  { label: "Overall", color: "#2563eb", file: "CSULol" },
-  { label: "CLoL",    color: "#dc2626", file: "CSULolClol" },
-];
+function formatRank(rank: RankInfo): string {
+  if (!rank || !rank.tier_text) return "Not found";
 
-const NA_STATS: LeagueStats = {
-  team: {
-    name: "N/A", game: "N/A", season: "N/A", region: "N/A",
-    overallRecord: "N/A", winRate: 0, averageGameTime: "N/A",
-    goldDifferenceAt15: 0, firstBloodRate: 0, firstTowerRate: 0,
-    dragonControlRate: 0, heraldControlRate: 0, baronControlRate: 0,
-    earlyGameRating: 0, midGameRating: 0, lateGameRating: 0,
-    teamKDA: 0, averageKillsPerGame: 0, averageDeathsPerGame: 0,
-    averageGoldPerMinute: 0, averageVisionScorePerMinute: 0,
-    preferredPlaystyle: "N/A", bestSide: "N/A", worstSide: "N/A",
-  },
-  players: [],
-  draftTrends: {
-    mostBannedAgainst: [], flexPickRate: 0, redSideCounterPickWinRate: 0,
-    averageDraftAdaptabilityRating: 0, earlyGameCompWinRate: 0, scalingCompWinRate: 0,
-  },
-  teamStrengths: ["N/A"],
-  teamWeaknesses: ["N/A"],
-};
+  const pieces: string[] = [rank.tier_text];
 
-type KPIProps = { label: string; value: string | number };
+  if (rank.lp !== null && rank.lp !== undefined) {
+    pieces.push(`${rank.lp} LP`);
+  }
 
-function KPI({ label, value }: KPIProps) {
+  if (
+    rank.wins !== null &&
+    rank.wins !== undefined &&
+    rank.losses !== null &&
+    rank.losses !== undefined
+  ) {
+    pieces.push(`${rank.wins}W-${rank.losses}L`);
+  }
+
+  if (rank.win_rate !== null && rank.win_rate !== undefined) {
+    pieces.push(`${rank.win_rate}% WR`);
+  }
+
+  return pieces.join(" • ");
+}
+
+function formatHighestRank(
+  rank: { tier_text: string | null; lp: number | null } | null
+): string {
+  if (!rank || !rank.tier_text) return "Not found";
+  if (rank.lp === null || rank.lp === undefined) return rank.tier_text;
+  return `${rank.tier_text} • ${rank.lp} LP`;
+}
+
+function TeamInfoRow({
+  label,
+  value,
+}: {
+  label: string;
+  value: React.ReactNode;
+}) {
   return (
-    <div style={styles.kpi}>
-      <div style={styles.kpiLabel}>{label}</div>
-      <div style={styles.kpiValue}>{value}</div>
+    <div style={styles.infoRow}>
+      <span style={styles.infoLabel}>{label}</span>
+      <span style={styles.infoValue}>{value}</span>
     </div>
   );
 }
 
-function LeagueStatsContent() {
-  const router = useRouter();
-  const params = useSearchParams();
-  const teamQuery = params.get("team") ?? "CSU";
+function formatTimestamp(timestamp: string | null): string {
+  if (!timestamp) return "Not found";
 
-  const [activeTab, setActiveTab] = useState<Tab>("Overall");
-  const [s, setS] = useState<LeagueStats | null>(null);
+  try {
+    const date = new Date(timestamp);
 
-  const activeColor = TABS.find((t) => t.label === activeTab)!.color;
-  const activeFile  = TABS.find((t) => t.label === activeTab)!.file;
+    return new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+      timeZone: "UTC",
+    }).format(date) + " UTC";
+  } catch {
+    return "Not found";
+  }
+}
 
-  useEffect(() => {
-    setS(null);
-
-    fetch(`/teams/${activeFile}.json`)
-      .then((res) => {
-        if (!res.ok) throw new Error("not found");
-        return res.json() as Promise<LeagueStats>;
-      })
-      .then(setS)
-      .catch(() => setS(NA_STATS));
-  }, [activeFile]);
-
-  const naMode = s?.team.name === "N/A";
-
+function PlayerCard({ player }: { player: Player }) {
   return (
-    <main style={styles.container}>
-      {/* ── Header ─────────────────────────────────── */}
-      <div style={styles.headerRow}>
+    <article style={styles.card}>
+      <div style={styles.cardHeader}>
         <div>
-          <h1 style={styles.title}>
-            {!s ? "Loading…" : naMode ? "CSU Vikes Green" : s.team.name}
-          </h1>
-          {s && !naMode && (
-            <p style={styles.subtitle}>
-              {s.team.game} • {s.team.season} • {s.team.region} • Team query: <strong>{teamQuery}</strong>
-            </p>
-          )}
+          <h2 style={styles.playerName}>{safeText(player.display_name)}</h2>
+          <p style={styles.subtleText}>
+            Updated: {formatTimestamp(player.updated_at_utc)}
+          </p>
         </div>
-        <button style={styles.backBtn} onClick={() => router.push("/league")}>
-          Back
-        </button>
       </div>
 
-      {/* ── Tabs ───────────────────────────────────── */}
-      <div style={styles.tabRow}>
-        {TABS.map((tab) => {
-          const isActive = activeTab === tab.label;
-          return (
-            <button
-              key={tab.label}
-              onClick={() => setActiveTab(tab.label)}
-              style={{
-                ...styles.tabBtn,
-                background:  isActive ? tab.color : "rgba(255,255,255,0.07)",
-                color:       isActive ? "white"   : "rgba(255,255,255,0.5)",
-                borderColor: isActive ? tab.color : "rgba(255,255,255,0.12)",
-                boxShadow:   isActive ? `0 0 14px ${tab.color}66` : "none",
-              }}
-            >
-              {tab.label}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* ── Loading ────────────────────────────────── */}
-      {!s && <p style={{ opacity: 0.6, marginTop: "1.5rem" }}>Loading stats…</p>}
-
-      {s && (
-        <>
-          {/* No-data banner */}
-          {naMode && (
-            <div style={{ ...styles.card, borderColor: `${activeColor}55`, opacity: 0.7 }}>
-              <p style={{ margin: 0 }}>No data available for this league yet.</p>
-            </div>
-          )}
-
-          {/* ── Team Overview ──────────────────────── */}
-          <section style={{ ...styles.card, borderColor: `${activeColor}55` }}>
-            <h2 style={{ ...styles.sectionTitle, color: activeColor }}>Team Overview</h2>
-            <div style={styles.kpiGrid}>
-              <KPI label="Record"        value={naMode ? "N/A" : s.team.overallRecord} />
-              <KPI label="Win Rate"      value={naMode ? "N/A" : `${s.team.winRate}%`} />
-              <KPI label="Avg Game Time" value={naMode ? "N/A" : s.team.averageGameTime} />
-              <KPI label="Gold @15"      value={naMode ? "N/A" : s.team.goldDifferenceAt15} />
-              <KPI label="First Blood"   value={naMode ? "N/A" : `${s.team.firstBloodRate}%`} />
-              <KPI label="First Tower"   value={naMode ? "N/A" : `${s.team.firstTowerRate}%`} />
-              <KPI label="Dragon Ctrl"   value={naMode ? "N/A" : `${s.team.dragonControlRate}%`} />
-              <KPI label="Baron Ctrl"    value={naMode ? "N/A" : `${s.team.baronControlRate}%`} />
-              <KPI label="Team KDA"      value={naMode ? "N/A" : s.team.teamKDA} />
-            </div>
-            <div style={styles.noteCard}>
-              <div style={styles.noteTitle}>Preferred Playstyle</div>
-              <div style={styles.noteText}>{naMode ? "N/A" : s.team.preferredPlaystyle}</div>
-              <div style={styles.noteMeta}>
-                Best side: <strong>{naMode ? "N/A" : s.team.bestSide}</strong> • Worst side:{" "}
-                <strong>{naMode ? "N/A" : s.team.worstSide}</strong>
-              </div>
-            </div>
-          </section>
-
-          {/* ── Players ────────────────────────────── */}
-          <section style={{ ...styles.card, borderColor: `${activeColor}55` }}>
-            <h2 style={{ ...styles.sectionTitle, color: activeColor }}>Players</h2>
-            {naMode ? (
-              <p style={{ opacity: 0.6, margin: 0 }}>N/A</p>
+      <div style={styles.section}>
+        <h3 style={styles.sectionTitle}>Basic Info</h3>
+        <TeamInfoRow label="Main Role" value={safeText(player.main_role)} />
+        <TeamInfoRow label="Ladder Rank" value={safeText(player.ladder_rank)} />
+        <TeamInfoRow
+          label="OP.GG"
+          value={
+            player.opgg_url ? (
+              <a href={player.opgg_url} target="_blank" rel="noreferrer" style={styles.link}>
+                Open profile
+              </a>
             ) : (
-              <div style={styles.table}>
-                <div style={{ ...styles.trLeague, ...styles.th }}>
-                  <div>Name</div>
-                  <div>Role</div>
-                  <div>KDA</div>
-                  <div>Champion Pool</div>
+              "Not found"
+            )
+          }
+        />
+      </div>
+
+      <div style={styles.section}>
+        <h3 style={styles.sectionTitle}>Ranked</h3>
+        <TeamInfoRow label="Solo/Duo" value={formatRank(player.solo_duo_rank)} />
+        <TeamInfoRow label="Highest Rank" value={formatHighestRank(player.highest_rank)} />
+        <TeamInfoRow label="Flex Rank" value={formatRank(player.flex_rank)} />
+      </div>
+
+      <div style={styles.section}>
+        <h3 style={styles.sectionTitle}>Top Roles</h3>
+        {player.top_roles && player.top_roles.length > 0 ? (
+          <div style={styles.tagWrap}>
+            {player.top_roles.map((role, idx) => (
+              <span key={`${role.role}-${idx}`} style={styles.tag}>
+                {role.role} {role.percentage}%
+              </span>
+            ))}
+          </div>
+        ) : (
+          <p style={styles.emptyText}>No role data found.</p>
+        )}
+      </div>
+
+      <div style={styles.section}>
+        <h3 style={styles.sectionTitle}>Top 5 Masteries</h3>
+        {player.top_5_masteries && player.top_5_masteries.length > 0 ? (
+          <div style={styles.masteryList}>
+            {player.top_5_masteries.map((champ, idx) => (
+              <div key={`${champ.champion}-${idx}`} style={styles.masteryItem}>
+                <div style={styles.masteryChampion}>{safeText(champ.champion)}</div>
+                <div style={styles.masteryMeta}>
+                  Level {safeText(champ.mastery_level)} • {safeText(champ.mastery_points)} pts
                 </div>
-                {s.players.map((p) => (
-                  <div key={p.name} style={styles.trLeague}>
-                    <div>{p.name}</div>
-                    <div style={{ opacity: 0.9 }}>{p.role}</div>
-                    <div>{p.KDA}</div>
-                    <div style={{ opacity: 0.9 }}>{p.championPool.join(", ")}</div>
-                  </div>
-                ))}
               </div>
-            )}
-          </section>
+            ))}
+          </div>
+        ) : (
+          <p style={styles.emptyText}>No mastery data found.</p>
+        )}
+      </div>
 
-          {/* ── Draft Trends ───────────────────────── */}
-          <section style={{ ...styles.card, borderColor: `${activeColor}55` }}>
-            <h2 style={{ ...styles.sectionTitle, color: activeColor }}>Draft Trends</h2>
-            <div style={styles.kpiGrid}>
-              <KPI label="Most Banned"          value={naMode ? "N/A" : s.draftTrends.mostBannedAgainst.join(", ")} />
-              <KPI label="Flex Pick Rate"        value={naMode ? "N/A" : `${s.draftTrends.flexPickRate}%`} />
-              <KPI label="Red-side Counter Win%" value={naMode ? "N/A" : `${s.draftTrends.redSideCounterPickWinRate}%`} />
-              <KPI label="Draft Adaptability"    value={naMode ? "N/A" : s.draftTrends.averageDraftAdaptabilityRating} />
-              <KPI label="Early Comp Win%"       value={naMode ? "N/A" : `${s.draftTrends.earlyGameCompWinRate}%`} />
-              <KPI label="Scaling Comp Win%"     value={naMode ? "N/A" : `${s.draftTrends.scalingCompWinRate}%`} />
-            </div>
-          </section>
-
-          {/* ── Strengths & Weaknesses ─────────────── */}
-          <section style={{ ...styles.card, borderColor: `${activeColor}55` }}>
-            <h2 style={{ ...styles.sectionTitle, color: activeColor }}>Strengths & Weaknesses</h2>
-            <div style={styles.twoCol}>
-              <div style={styles.listCard}>
-                <div style={styles.listTitle}>Strengths</div>
-                <ul style={styles.ul}>
-                  {s.teamStrengths.map((x) => <li key={x}>{x}</li>)}
-                </ul>
-              </div>
-              <div style={styles.listCard}>
-                <div style={styles.listTitle}>Weaknesses</div>
-                <ul style={styles.ul}>
-                  {s.teamWeaknesses.map((x) => <li key={x}>{x}</li>)}
-                </ul>
-              </div>
-            </div>
-          </section>
-        </>
+      {player.error && (
+        <div style={styles.errorBox}>
+          <strong>Scrape Error:</strong> {player.error}
+        </div>
       )}
-    </main>
+    </article>
   );
 }
 
 export default function LeagueStatsPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  const team = useMemo(() => {
+    const raw = searchParams.get("team");
+    return raw ? decodeURIComponent(raw) : "";
+  }, [searchParams]);
+
+  const [data, setData] = useState<ApiResponse | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string>("");
+
+  useEffect(() => {
+    async function loadPlayers() {
+      if (!team) {
+        setError("No team was selected.");
+        setLoading(false);
+        return;
+      }
+
+      try {
+        setLoading(true);
+        setError("");
+
+        if (!API_BASE_URL) {
+          throw new Error("Missing NEXT_PUBLIC_API_BASE_URL environment variable.");
+        }
+
+        const res = await fetch(
+          `${API_BASE_URL}/api/league/team-players?team=${encodeURIComponent(team)}`,
+          { cache: "no-store" }
+        );
+
+        const json: ApiResponse = await res.json();
+
+        if (!res.ok || !json.ok) {
+          throw new Error(json.error || "Failed to load team players.");
+        }
+
+        setData(json);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Unknown error.");
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadPlayers();
+  }, [team]);
+
   return (
-    <Suspense fallback={<main style={{ minHeight: "100vh", backgroundColor: "#0f172a", color: "white", padding: "2rem" }}>Loading…</main>}>
-      <LeagueStatsContent />
-    </Suspense>
+    <main style={styles.page}>
+      <div style={styles.pageInner}>
+        <div style={styles.topBar}>
+          <button type="button" onClick={() => router.push("/league")} style={styles.backBtn}>
+            ← Back
+          </button>
+        </div>
+
+        <header style={styles.hero}>
+          <h1 style={styles.title}>{team || "Team Stats"}</h1>
+          <p style={styles.kicker}>League Of Legends Team Details</p>
+        </header>
+
+        {loading && <div style={styles.messageBox}>Loading players...</div>}
+
+        {!loading && error && <div style={styles.errorBoxLarge}>{error}</div>}
+
+        {!loading && !error && data && (
+          <>
+            <div style={styles.summaryBar}>
+              <span>
+                <strong>Team:</strong> {data.team}
+              </span>
+              <span>
+                <strong>Players Found:</strong> {data.count}
+              </span>
+            </div>
+
+            {data.players.length === 0 ? (
+              <div style={styles.messageBox}>No players were found for this team.</div>
+            ) : (
+              <div style={styles.grid}>
+                {data.players.map((player, idx) => (
+                  <PlayerCard key={`${player.riot_id ?? player.display_name ?? "player"}-${idx}`} player={player} />
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </main>
   );
 }
 
 const styles: Record<string, CSSProperties> = {
-  container:    { minHeight: "100vh", backgroundColor: "#0f172a", color: "white", padding: "2rem" },
-  headerRow:    { display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", marginBottom: "1.25rem" },
-  title:        { fontSize: "2.2rem", margin: 0 },
-  subtitle:     { marginTop: "0.35rem", opacity: 0.85 },
-  backBtn:      { padding: "0.7rem 1rem", borderRadius: 12, border: "none", cursor: "pointer", background: "#2563eb", color: "white" },
-
-  tabRow:       { display: "flex", gap: "0.6rem", marginBottom: "1.25rem", flexWrap: "wrap" },
-  tabBtn:       {
-    padding: "0.55rem 1.5rem",
-    borderRadius: 10,
-    border: "1px solid",
-    cursor: "pointer",
-    fontWeight: 600,
-    fontSize: "0.95rem",
-    transition: "background 0.15s, color 0.15s, box-shadow 0.15s",
+  page: {
+    minHeight: "100vh",
+    backgroundColor: "#0f172a",
+    color: "white",
+    padding: "2rem 1.25rem 4rem",
   },
-
-  card:         { border: "1px solid rgba(255,255,255,0.15)", background: "rgba(255,255,255,0.06)", borderRadius: 16, padding: "1.25rem", marginTop: "1rem" },
-  sectionTitle: { fontSize: "1.2rem", marginTop: 0, marginBottom: "0.75rem" },
-
-  kpiGrid:      { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "0.75rem" },
-  kpi:          { padding: "0.75rem", borderRadius: 14, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(0,0,0,0.18)" },
-  kpiLabel:     { fontSize: "0.9rem", opacity: 0.85 },
-  kpiValue:     { fontSize: "1.15rem", marginTop: "0.2rem" },
-
-  noteCard:     { marginTop: "0.85rem", padding: "0.85rem", borderRadius: 14, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(0,0,0,0.18)" },
-  noteTitle:    { fontSize: "0.95rem", opacity: 0.9, fontWeight: 700 },
-  noteText:     { marginTop: "0.35rem", opacity: 0.9 },
-  noteMeta:     { marginTop: "0.35rem", opacity: 0.85 },
-
-  table:        { display: "grid", gap: "0.5rem" },
-  trLeague: {
+  pageInner: {
+    width: "min(1300px, 100%)",
+    margin: "0 auto",
+  },
+  topBar: {
+    marginBottom: "1rem",
+  },
+  hero: {
+    marginBottom: "1.5rem",
+  },
+  kicker: {
+    fontSize: "0.8rem",
+    opacity: 0.65,
+    textTransform: "uppercase",
+    letterSpacing: "0.08em",
+    marginBottom: "0.4rem",
+  },
+  title: {
+    fontSize: "2.2rem",
+    fontWeight: 700,
+    margin: 0,
+  },
+  subtitle: {
+    marginTop: "0.5rem",
+    color: "rgba(255,255,255,0.7)",
+  },
+  summaryBar: {
+    display: "flex",
+    gap: "1rem",
+    flexWrap: "wrap",
+    marginBottom: "1.25rem",
+    padding: "0.9rem 1rem",
+    borderRadius: "14px",
+    background: "rgba(255,255,255,0.05)",
+    border: "1px solid rgba(255,255,255,0.1)",
+  },
+  grid: {
     display: "grid",
-    gridTemplateColumns: "1.2fr 0.7fr 0.5fr 2.2fr",
-    gap: "0.75rem",
-    padding: "0.75rem",
-    borderRadius: 14,
-    border: "1px solid rgba(255,255,255,0.12)",
-    background: "rgba(0,0,0,0.18)",
-    alignItems: "center",
+    gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))",
+    gap: "1rem",
   },
-  th:           { background: "rgba(255,255,255,0.08)", fontWeight: 700 },
-
-  twoCol:       { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "1rem" },
-  listCard:     { padding: "0.9rem", borderRadius: 14, border: "1px solid rgba(255,255,255,0.12)", background: "rgba(0,0,0,0.18)" },
-  listTitle:    { fontSize: "1.05rem", fontWeight: 700, marginBottom: "0.5rem" },
-  ul:           { margin: 0, paddingLeft: "1.1rem", opacity: 0.9, lineHeight: 1.5 },
+  card: {
+    background: "rgba(255,255,255,0.05)",
+    border: "1px solid rgba(255,255,255,0.1)",
+    borderRadius: "16px",
+    padding: "1rem",
+    boxSizing: "border-box",
+  },
+  cardHeader: {
+    display: "block",
+    marginBottom: "1rem",
+  },
+  playerName: {
+    margin: 0,
+    fontSize: "1.2rem",
+    fontWeight: 700,
+  },
+  subtleText: {
+    margin: "0.35rem 0 0",
+    color: "rgba(255,255,255,0.6)",
+    fontSize: "0.9rem",
+    lineHeight: 1.4,
+    wordBreak: "break-word",
+  },
+  section: {
+    marginTop: "1rem",
+  },
+  sectionTitle: {
+    fontSize: "0.95rem",
+    marginBottom: "0.65rem",
+    color: "#93c5fd",
+  },
+  infoRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: "1rem",
+    padding: "0.45rem 0",
+    borderBottom: "1px solid rgba(255,255,255,0.06)",
+  },
+  infoLabel: {
+    color: "rgba(255,255,255,0.62)",
+    minWidth: "120px",
+  },
+  infoValue: {
+    textAlign: "right",
+    wordBreak: "break-word",
+  },
+  tagWrap: {
+    display: "flex",
+    gap: "0.5rem",
+    flexWrap: "wrap",
+  },
+  tag: {
+    padding: "0.45rem 0.65rem",
+    borderRadius: "999px",
+    background: "rgba(37,99,235,0.2)",
+    border: "1px solid rgba(37,99,235,0.45)",
+    fontSize: "0.85rem",
+  },
+  masteryList: {
+    display: "grid",
+    gap: "0.55rem",
+  },
+  masteryItem: {
+    padding: "0.7rem 0.8rem",
+    borderRadius: "12px",
+    background: "rgba(255,255,255,0.04)",
+    border: "1px solid rgba(255,255,255,0.08)",
+  },
+  masteryChampion: {
+    fontWeight: 600,
+    marginBottom: "0.2rem",
+  },
+  masteryMeta: {
+    color: "rgba(255,255,255,0.68)",
+    fontSize: "0.9rem",
+  },
+  emptyText: {
+    color: "rgba(255,255,255,0.58)",
+    margin: 0,
+  },
+  messageBox: {
+    padding: "1rem",
+    borderRadius: "14px",
+    background: "rgba(255,255,255,0.05)",
+    border: "1px solid rgba(255,255,255,0.1)",
+  },
+  errorBox: {
+    marginTop: "1rem",
+    padding: "0.8rem",
+    borderRadius: "12px",
+    background: "rgba(239,68,68,0.16)",
+    border: "1px solid rgba(239,68,68,0.35)",
+    color: "#fecaca",
+  },
+  errorBoxLarge: {
+    padding: "1rem",
+    borderRadius: "14px",
+    background: "rgba(239,68,68,0.16)",
+    border: "1px solid rgba(239,68,68,0.35)",
+    color: "#fecaca",
+  },
+  backBtn: {
+    padding: "0.7rem 1rem",
+    borderRadius: "10px",
+    border: "1px solid rgba(255,255,255,0.14)",
+    background: "transparent",
+    color: "white",
+    cursor: "pointer",
+  },
+  link: {
+    color: "#93c5fd",
+    textDecoration: "none",
+  },
+  mono: {
+    fontFamily: "monospace",
+    fontSize: "0.82rem",
+  },
 };
