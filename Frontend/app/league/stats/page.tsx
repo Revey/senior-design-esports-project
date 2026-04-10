@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { CSSProperties } from "react";
 
@@ -214,7 +214,7 @@ function PlayerCard({ player }: { player: Player }) {
   );
 }
 
-export default function LeagueStatsPage() {
+function LeagueStatsInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -307,6 +307,14 @@ export default function LeagueStatsPage() {
         )}
       </div>
     </main>
+  );
+}
+
+export default function LeagueStatsPage() {
+  return (
+    <Suspense fallback={<main style={{ minHeight: "100vh", backgroundColor: "#0f172a", color: "white", padding: "2rem" }}>Loading...</main>}>
+      <LeagueStatsInner />
+    </Suspense>
   );
 }
 
