@@ -25,7 +25,7 @@ const GAME_TABS: { label: GameFilter; color: string }[] = [
   { label: "League of Legends", color: "#c89b3c" },
 ];
 
-const API = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
+const API = (process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000").replace(/\/$/, "");
 
 function ratingColor(r: number): string {
   if (r >= 1800) return "#22c55e";

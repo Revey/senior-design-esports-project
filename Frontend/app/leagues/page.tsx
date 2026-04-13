@@ -29,7 +29,7 @@ const TABS: { slug: Tab; label: string; color: string }[] = [
   { slug: "clol", label: "CLoL", color: "#c89b3c" },
 ];
 
-const API = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
+const API = (process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000").replace(/\/$/, "");
 
 function LeaguesContent() {
   const [leagues, setLeagues] = useState<League[]>([]);

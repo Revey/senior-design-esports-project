@@ -36,7 +36,7 @@ const GAME_TABS: { label: GameFilter; color: string }[] = [
 const VAL_ROLES = ["All", "Duelist", "Initiator", "Controller", "Sentinel", "Flex"];
 const LOL_ROLES = ["All", "Top", "Jungle", "Mid", "ADC", "Support"];
 
-const API = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
+const API = (process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000").replace(/\/$/, "");
 
 function ratingColor(r: number): string {
   if (r >= 1700) return "#22c55e";

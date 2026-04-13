@@ -33,7 +33,7 @@ const STATUS_TABS: { label: string; value: StatusFilter; color: string }[] = [
   { label: "Completed", value: "completed", color: "#6b7280" },
 ];
 
-const API = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
+const API = (process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000").replace(/\/$/, "");
 
 function statusBadgeStyle(status: string): CSSProperties {
   const colors: Record<string, { bg: string; fg: string }> = {
