@@ -51,6 +51,11 @@ try:
 except ImportError:
     players_router = None
 
+try:
+    from core.admin_router import router as admin_router
+except ImportError:
+    admin_router = None
+
 
 # --------------------------------------------------------------------
 # Logging
@@ -164,6 +169,9 @@ if teams_router is not None:
 
 if players_router is not None:
     app.include_router(players_router, prefix="/api/players")
+
+if admin_router is not None:
+    app.include_router(admin_router, prefix="/api/admin")
 
 
 # --------------------------------------------------------------------
