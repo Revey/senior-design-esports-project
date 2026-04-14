@@ -72,8 +72,9 @@ function TeamsContent() {
 
   return (
     <main style={s.container}>
-      <h1 style={s.title}>Team Rankings</h1>
-      <p style={s.subtitle}>Collegiate esports team rankings</p>
+      <div className="page-content">
+      <h1 style={s.title}>Team rankings</h1>
+      <p style={s.subtitle}>Collegiate esports — sorted by rating</p>
 
       {/* Game filter tabs */}
       <div style={s.tabRow}>
@@ -118,11 +119,15 @@ function TeamsContent() {
         </div>
 
         {teams.length === 0 && !error && (
-          <p style={{ padding: "1rem", opacity: 0.6 }}>Loading...</p>
+          <div style={{ padding: "1rem", display: "flex", flexDirection: "column", gap: "0.6rem" }}>
+            {[...Array(6)].map((_, i) => (
+              <div key={i} className="skeleton-line" style={{ height: "44px", opacity: 1 - i * 0.1 }} />
+            ))}
+          </div>
         )}
 
         {teams.map((t, i) => (
-          <div key={t.slug} style={s.row}>
+          <div key={t.slug} className="data-row row-enter" style={{ ...s.row, animationDelay: `${i * 0.03}s` }}>
             <div style={s.rankCol}>
               <span style={{ ...s.rankBadge, background: i < 3 ? activeColor : "rgba(255,255,255,0.08)" }}>
                 {i + 1}
@@ -143,32 +148,33 @@ function TeamsContent() {
                 {t.game === "Valorant" ? "VAL" : "LoL"}
               </span>
             </div>
-            <div style={s.statCol}>
+            <div className="tabular-nums" style={s.statCol}>
               {t.record.wins}-{t.record.losses}
             </div>
-            <div style={s.statCol}>{t.win_rate}%</div>
-            <div style={s.ratingCol}>
+            <div className="tabular-nums" style={s.statCol}>{t.win_rate}%</div>
+            <div className="tabular-nums" style={s.ratingCol}>
               <span style={{ ...s.ratingBadge, color: ratingColor(t.rating) }}>{t.rating}</span>
             </div>
           </div>
         ))}
       </section>
+      </div>
     </main>
   );
 }
 
 export default function TeamsPage() {
   return (
-    <Suspense fallback={<main style={{ minHeight: "100vh", backgroundColor: "#0f172a", color: "white", padding: "2rem" }}>Loading...</main>}>
+    <Suspense fallback={<main style={{ minHeight: "100dvh", backgroundColor: "#0d1526", color: "white", padding: "2rem" }} />}>
       <TeamsContent />
     </Suspense>
   );
 }
 
 const s: Record<string, CSSProperties> = {
-  container: { minHeight: "100vh", backgroundColor: "#0f172a", color: "white", padding: "2rem" },
-  title: { fontSize: "2.2rem", margin: 0 },
-  subtitle: { marginTop: "0.35rem", opacity: 0.7, marginBottom: "1.25rem" },
+  container: { minHeight: "100dvh", backgroundColor: "#0d1526", color: "white", padding: "2rem" },
+  title: { fontSize: "clamp(1.6rem, 3vw, 2.2rem)", fontWeight: 700, letterSpacing: "-0.02em", margin: 0 },
+  subtitle: { marginTop: "0.35rem", opacity: 0.55, marginBottom: "1.5rem", fontSize: "0.95rem" },
 
   tabRow: { display: "flex", gap: "0.6rem", marginBottom: "1.25rem", flexWrap: "wrap" },
   tabBtn: {

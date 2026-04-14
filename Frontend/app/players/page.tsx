@@ -91,7 +91,8 @@ function PlayersContent() {
 
   return (
     <main style={s.container}>
-      <h1 style={s.title}>Player Rankings</h1>
+      <div className="page-content">
+      <h1 style={s.title}>Player rankings</h1>
       <p style={s.subtitle}>Top collegiate esports players</p>
 
       {/* Game tabs */}
@@ -161,13 +162,17 @@ function PlayersContent() {
         </div>
 
         {players.length === 0 && !error && (
-          <p style={{ padding: "1rem", opacity: 0.6 }}>Loading...</p>
+          <div style={{ padding: "1rem", display: "flex", flexDirection: "column", gap: "0.6rem" }}>
+            {[...Array(8)].map((_, i) => (
+              <div key={i} className="skeleton-line" style={{ height: "40px", opacity: 1 - i * 0.08 }} />
+            ))}
+          </div>
         )}
 
         {players.map((p, i) => {
           const isValPlayer = p.game === "Valorant";
           return (
-            <div key={p.slug} style={s.row}>
+            <div key={p.slug} className="data-row row-enter" style={{ ...s.row, animationDelay: `${i * 0.025}s` }}>
               <div style={s.rankCol}>
                 <span style={{ ...s.rankBadge, background: i < 3 ? activeColor : "rgba(255,255,255,0.08)" }}>
                   {i + 1}
@@ -188,41 +193,42 @@ function PlayersContent() {
               </div>
               <div style={{ ...s.teamCol, opacity: 0.8 }}>{p.team_name}</div>
               <div style={s.roleCol}>{p.role}</div>
-              <div style={s.stat}>
+              <div className="tabular-nums" style={s.stat}>
                 {isValPlayer ? (p.stats.kd ?? "-") : (p.stats.kda ?? "-")}
               </div>
-              <div style={s.stat}>
+              <div className="tabular-nums" style={s.stat}>
                 {isValPlayer ? (p.stats.acs ?? "-") : (p.stats.kills_per_game ?? "-")}
               </div>
-              <div style={s.stat}>
+              <div className="tabular-nums" style={s.stat}>
                 {isValPlayer ? (p.stats.adr ?? "-") : (p.stats.deaths_per_game ?? "-")}
               </div>
-              <div style={s.stat}>
+              <div className="tabular-nums" style={s.stat}>
                 {isValPlayer ? (p.stats.hs_percent != null ? `${p.stats.hs_percent}%` : "-") : (p.stats.assists_per_game ?? "-")}
               </div>
-              <div style={s.ratingCol}>
+              <div className="tabular-nums" style={s.ratingCol}>
                 <span style={{ fontWeight: 700, color: ratingColor(p.rating) }}>{p.rating}</span>
               </div>
             </div>
           );
         })}
       </section>
+      </div>
     </main>
   );
 }
 
 export default function PlayersPage() {
   return (
-    <Suspense fallback={<main style={{ minHeight: "100vh", backgroundColor: "#0f172a", color: "white", padding: "2rem" }}>Loading...</main>}>
+    <Suspense fallback={<main style={{ minHeight: "100dvh", backgroundColor: "#0d1526", color: "white", padding: "2rem" }} />}>
       <PlayersContent />
     </Suspense>
   );
 }
 
 const s: Record<string, CSSProperties> = {
-  container: { minHeight: "100vh", backgroundColor: "#0f172a", color: "white", padding: "2rem" },
-  title: { fontSize: "2.2rem", margin: 0 },
-  subtitle: { marginTop: "0.35rem", opacity: 0.7, marginBottom: "1.25rem" },
+  container: { minHeight: "100dvh", backgroundColor: "#0d1526", color: "white", padding: "2rem" },
+  title: { fontSize: "clamp(1.6rem, 3vw, 2.2rem)", fontWeight: 700, letterSpacing: "-0.02em", margin: 0 },
+  subtitle: { marginTop: "0.35rem", opacity: 0.55, marginBottom: "1.5rem", fontSize: "0.95rem" },
 
   tabRow: { display: "flex", gap: "0.6rem", marginBottom: "1rem", flexWrap: "wrap" },
   tabBtn: {

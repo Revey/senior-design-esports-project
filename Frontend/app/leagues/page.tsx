@@ -52,7 +52,8 @@ function LeaguesContent() {
 
   return (
     <main style={s.container}>
-      <h1 style={s.title}>Collegiate Esports Leagues</h1>
+      <div className="page-content">
+      <h1 style={s.title}>Collegiate esports leagues</h1>
       <p style={s.subtitle}>Official competitive leagues for collegiate teams</p>
 
       {/* League tabs */}
@@ -79,7 +80,12 @@ function LeaguesContent() {
 
       {error && <p style={{ color: "#f87171" }}>{error}</p>}
 
-      {!league && !error && <p style={{ opacity: 0.6 }}>Loading...</p>}
+      {!league && !error && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+          <div className="skeleton-line" style={{ height: "110px" }} />
+          <div className="skeleton-line" style={{ height: "240px" }} />
+        </div>
+      )}
 
       {league && (
         <>
@@ -114,9 +120,11 @@ function LeaguesContent() {
             {league.standings.map((st) => (
               <div
                 key={st.team_slug}
+                className="data-row row-enter"
                 style={{
                   ...s.standingsRow,
                   borderLeft: st.rank <= 3 ? `3px solid ${activeColor}` : "3px solid transparent",
+                  animationDelay: `${st.rank * 0.04}s`,
                 }}
               >
                 <div style={s.rankCol}>
@@ -130,9 +138,9 @@ function LeaguesContent() {
                   </span>
                 </div>
                 <div style={{ ...s.teamCol, fontWeight: 600 }}>{st.team_name}</div>
-                <div style={s.statCol}>{st.wins}</div>
-                <div style={s.statCol}>{st.losses}</div>
-                <div style={s.statCol}>
+                <div className="tabular-nums" style={s.statCol}>{st.wins}</div>
+                <div className="tabular-nums" style={s.statCol}>{st.losses}</div>
+                <div className="tabular-nums" style={s.statCol}>
                   <span
                     style={{
                       color: st.win_rate >= 60 ? "#22c55e" : st.win_rate >= 50 ? "#eab308" : "#f87171",
@@ -147,22 +155,23 @@ function LeaguesContent() {
           </section>
         </>
       )}
+      </div>
     </main>
   );
 }
 
 export default function LeaguesPage() {
   return (
-    <Suspense fallback={<main style={{ minHeight: "100vh", backgroundColor: "#0f172a", color: "white", padding: "2rem" }}>Loading...</main>}>
+    <Suspense fallback={<main style={{ minHeight: "100dvh", backgroundColor: "#0d1526", color: "white", padding: "2rem" }} />}>
       <LeaguesContent />
     </Suspense>
   );
 }
 
 const s: Record<string, CSSProperties> = {
-  container: { minHeight: "100vh", backgroundColor: "#0f172a", color: "white", padding: "2rem" },
-  title: { fontSize: "2.2rem", margin: 0 },
-  subtitle: { marginTop: "0.35rem", opacity: 0.7, marginBottom: "1.25rem" },
+  container: { minHeight: "100dvh", backgroundColor: "#0d1526", color: "white", padding: "2rem" },
+  title: { fontSize: "clamp(1.6rem, 3vw, 2.2rem)", fontWeight: 700, letterSpacing: "-0.02em", margin: 0 },
+  subtitle: { marginTop: "0.35rem", opacity: 0.55, marginBottom: "1.5rem", fontSize: "0.95rem" },
 
   tabRow: { display: "flex", gap: "0.6rem", marginBottom: "1.25rem", flexWrap: "wrap" },
   tabBtn: {

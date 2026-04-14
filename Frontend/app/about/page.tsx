@@ -67,15 +67,15 @@ export default function AboutPage() {
         <section style={styles.card}>
           <h2 style={styles.sectionTitle}>Leagues We Track</h2>
           <div style={styles.leagueGrid}>
-            <div style={{ ...styles.leagueCard, borderColor: "#ca8a04" }}>
-              <h3 style={{ ...styles.leagueName, color: "#ca8a04" }}>CVAL</h3>
+            <div style={{ ...styles.leagueCard, borderColor: "#ff4655" }}>
+              <h3 style={{ ...styles.leagueName, color: "#ff4655" }}>CVAL</h3>
               <p style={styles.leagueDesc}>
                 College VALORANT is the premier collegiate VALORANT league, featuring top university
                 teams competing in organized seasonal play with professional production standards.
               </p>
             </div>
-            <div style={{ ...styles.leagueCard, borderColor: "#2563eb" }}>
-              <h3 style={{ ...styles.leagueName, color: "#2563eb" }}>CLOL</h3>
+            <div style={{ ...styles.leagueCard, borderColor: "#c89b3c" }}>
+              <h3 style={{ ...styles.leagueName, color: "#c89b3c" }}>CLOL</h3>
               <p style={styles.leagueDesc}>
                 College League of Legends Championship is the official collegiate league for
                 League of Legends, sanctioned by Riot Games with scholarship opportunities.
@@ -96,7 +96,7 @@ export default function AboutPage() {
                 <div>Major</div>
               </div>
               {CSU_VALORANT_ROSTER.map((player) => (
-                <div key={player.ign} style={styles.tableRow}>
+                <div key={player.ign} className="data-row" style={styles.tableRow}>
                   <div style={{ fontWeight: 600 }}>{player.ign}</div>
                   <div>{player.name}</div>
                   <div style={{ opacity: 0.9 }}>{player.role}</div>
@@ -142,8 +142,8 @@ export default function AboutPage() {
 
 const styles: Record<string, CSSProperties> = {
   container: {
-    minHeight: "100vh",
-    backgroundColor: "#0f172a",
+    minHeight: "100dvh",
+    backgroundColor: "#0d1526",
     color: "white",
     padding: "2rem",
   },
@@ -156,30 +156,34 @@ const styles: Record<string, CSSProperties> = {
     padding: "2rem 0 3rem",
   },
   heroTitle: {
-    fontSize: "2.8rem",
+    fontSize: "clamp(2rem, 5vw, 2.8rem)",
+    fontWeight: 700,
+    letterSpacing: "-0.03em",
     margin: 0,
-    background: "linear-gradient(135deg, #2563eb, #dc2626)",
-    WebkitBackgroundClip: "text",
-    WebkitTextFillColor: "transparent",
-    backgroundClip: "text",
+    color: "#ffffff",
   },
   heroSubtitle: {
-    fontSize: "1.2rem",
-    opacity: 0.85,
+    fontSize: "1.1rem",
+    opacity: 0.6,
     marginTop: "0.75rem",
+    maxWidth: "520px",
+    margin: "0.75rem auto 0",
+    lineHeight: 1.6,
   },
   card: {
-    border: "1px solid rgba(255,255,255,0.15)",
-    background: "rgba(255,255,255,0.06)",
+    border: "1px solid rgba(255,255,255,0.1)",
+    background: "rgba(255,255,255,0.04)",
     borderRadius: 16,
     padding: "1.5rem",
     marginBottom: "1.25rem",
   },
   sectionTitle: {
-    fontSize: "1.4rem",
+    fontSize: "1.2rem",
+    fontWeight: 600,
     marginTop: 0,
     marginBottom: "1rem",
-    color: "#60a5fa",
+    color: "rgba(255,255,255,0.9)",
+    letterSpacing: "-0.01em",
   },
   text: {
     lineHeight: 1.7,
@@ -251,8 +255,9 @@ const styles: Record<string, CSSProperties> = {
   privacyColumn: {},
   privacyHeading: {
     fontSize: "1rem",
+    fontWeight: 600,
     marginBottom: "0.5rem",
-    color: "#60a5fa",
+    color: "rgba(255,255,255,0.8)",
   },
   list: {
     margin: 0,

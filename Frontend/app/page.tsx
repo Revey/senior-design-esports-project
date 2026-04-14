@@ -2,92 +2,97 @@
 
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import type { CSSProperties } from "react";
+
+const GAMES = [
+  {
+    slug: "valorant",
+    name: "Valorant",
+    tag: "CVAL · 5v5 tactical",
+    href: "/valorant",
+    image: "/images/valorantimage.png",
+    modifier: "val" as const,
+  },
+  {
+    slug: "league",
+    name: "League of Legends",
+    tag: "CLOL · 5v5 MOBA",
+    href: "/league",
+    image: "/images/league-of-legends.png",
+    modifier: "lol" as const,
+  },
+];
+
+function ArrowIcon() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M3 8h10M9 4l4 4-4 4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
 
 export default function Home() {
   const router = useRouter();
 
   return (
-    <main style={styles.container}>
-      <h1 style={styles.title}>Choose Your Game</h1>
+    <main className="home-page">
+      <div className="home-bg" aria-hidden="true" />
+      <div className="home-grain" aria-hidden="true" />
 
-      <div style={styles.grid}>
-        {/* Valorant */}
-        <button
-          data-card
-          type="button"
-          style={styles.card}
-          aria-label="Select Valorant"
-          onClick={() => router.push("/valorant")}
-        >
-          <div style={styles.imageWrap}>
-            <Image
-              src="/images/valorantimage.png"
-              alt="Valorant"
-              fill
-              sizes="(max-width: 768px) 320px, 360px"
-              style={{ objectFit: "contain" }}
-              priority
-            />
-          </div>
-        </button>
+      <div className="home-content">
+        <span className="home-eyebrow">
+          <span className="home-eyebrow-dot" aria-hidden="true" />
+          Cleveland State Esports · Season 2026
+        </span>
 
-        {/* League of Legends */}
-        <button
-          data-card
-          type="button"
-          style={styles.card}
-          aria-label="Select League of Legends"
-          onClick={() => router.push("/league")}
-        >
-          <div style={styles.imageWrap}>
-            <Image
-              src="/images/league-of-legends.png"
-              alt="League of Legends"
-              fill
-              sizes="(max-width: 768px) 320px, 360px"
-              style={{ objectFit: "contain" }}
-            />
-          </div>
-        </button>
+        <h1 className="home-heading">
+          Choose your <em>arena</em>.
+        </h1>
+
+        <p className="home-sub">
+          Rankings, rosters, and match history for CSU&apos;s competitive
+          Valorant and League of Legends programs — updated after every
+          collegiate matchday.
+        </p>
+
+        <div className="home-cascade">
+          {GAMES.map((g) => (
+            <button
+              key={g.slug}
+              type="button"
+              className={`game-card game-card--${g.modifier}`}
+              onClick={() => router.push(g.href)}
+              aria-label={`Open ${g.name} stats`}
+            >
+              <div className="game-shell">
+                <div className="game-core">
+                  <div className="game-image-wrap">
+                    <Image
+                      src={g.image}
+                      alt={`${g.name} artwork`}
+                      fill
+                      sizes="(max-width: 768px) 320px, 320px"
+                      style={{ objectFit: "contain" }}
+                      priority={g.modifier === "val"}
+                    />
+                  </div>
+
+                  <div className="game-meta">
+                    <div className="game-name">{g.name}</div>
+                    <div className="game-tag">{g.tag}</div>
+                  </div>
+
+                  <div className="game-cta">
+                    <span>Enter rankings</span>
+                    <span className="game-cta-icon" aria-hidden="true">
+                      <ArrowIcon />
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
       </div>
     </main>
   );
 }
-
-const styles: Record<string, CSSProperties> = {
-  container: {
-    minHeight: "100vh",
-    display: "flex",
-    flexDirection: "column",
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "#0f172a",
-    color: "white",
-    padding: "2rem",
-  },
-  title: {
-    fontSize: "2.5rem",
-    marginBottom: "2rem",
-    textAlign: "center",
-  },
-  grid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(2, minmax(260px, 360px))",
-    gap: "2rem",
-  },
-  card: {
-    background: "rgba(255,255,255,0.06)",
-    border: "1px solid rgba(255,255,255,0.15)",
-    borderRadius: "16px",
-    padding: "14px",
-    cursor: "pointer",
-    width: "100%",
-    display: "block",
-  },
-  imageWrap: {
-    position: "relative",
-    width: "100%",
-    height: "360px",
-  },
-};

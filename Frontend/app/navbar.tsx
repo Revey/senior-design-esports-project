@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { usePathname } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
 
@@ -16,6 +17,7 @@ const navItems = [
 export default function Navbar() {
   const headerRef = useRef<HTMLElement>(null);
   const lastScrollY = useRef(0);
+  const pathname = usePathname();
 
   useEffect(() => {
     const header = headerRef.current;
@@ -56,11 +58,19 @@ export default function Navbar() {
 
       {/* Nav links — absolutely centered in the bar */}
       <nav className="navbar-links" aria-label="Main navigation">
-        {navItems.map((item) => (
-          <Link key={item.label} href={item.href} className="navbar-link">
-            {item.label}
-          </Link>
-        ))}
+        {navItems.map((item) => {
+          const isActive = item.href !== "/" && pathname.startsWith(item.href);
+          return (
+            <Link
+              key={item.label}
+              href={item.href}
+              className={`navbar-link${isActive ? " navbar-link--active" : ""}`}
+              aria-current={isActive ? "page" : undefined}
+            >
+              {item.label}
+            </Link>
+          );
+        })}
       </nav>
     </header>
   );

@@ -98,8 +98,9 @@ function TournamentsContent() {
 
   return (
     <main style={s.container}>
+      <div className="page-content">
       <h1 style={s.title}>Tournaments</h1>
-      <p style={s.subtitle}>Collegiate esports tournament brackets and results</p>
+      <p style={s.subtitle}>Collegiate esports brackets and results</p>
 
       {/* Status filter */}
       <div style={s.tabRow}>
@@ -126,7 +127,11 @@ function TournamentsContent() {
       {error && <p style={{ color: "#f87171" }}>{error}</p>}
 
       {tournaments.length === 0 && !error && (
-        <p style={{ opacity: 0.6 }}>Loading...</p>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+          {[...Array(3)].map((_, i) => (
+            <div key={i} className="skeleton-line" style={{ height: "140px", opacity: 1 - i * 0.2 }} />
+          ))}
+        </div>
       )}
 
       {/* Tournament cards */}
@@ -172,7 +177,7 @@ function TournamentsContent() {
               {isOpen && (
                 <div style={s.matchesSection}>
                   {t.matches.map((m, idx) => (
-                    <div key={idx} style={s.matchRow}>
+                    <div key={idx} className="data-row" style={s.matchRow}>
                       <div style={s.roundLabel}>{m.round}</div>
                       <div style={s.matchTeams}>
                         <span
@@ -206,22 +211,23 @@ function TournamentsContent() {
           );
         })}
       </div>
+      </div>
     </main>
   );
 }
 
 export default function TournamentsPage() {
   return (
-    <Suspense fallback={<main style={{ minHeight: "100vh", backgroundColor: "#0f172a", color: "white", padding: "2rem" }}>Loading...</main>}>
+    <Suspense fallback={<main style={{ minHeight: "100dvh", backgroundColor: "#0d1526", color: "white", padding: "2rem" }} />}>
       <TournamentsContent />
     </Suspense>
   );
 }
 
 const s: Record<string, CSSProperties> = {
-  container: { minHeight: "100vh", backgroundColor: "#0f172a", color: "white", padding: "2rem" },
-  title: { fontSize: "2.2rem", margin: 0 },
-  subtitle: { marginTop: "0.35rem", opacity: 0.7, marginBottom: "1.25rem" },
+  container: { minHeight: "100dvh", backgroundColor: "#0d1526", color: "white", padding: "2rem" },
+  title: { fontSize: "clamp(1.6rem, 3vw, 2.2rem)", fontWeight: 700, letterSpacing: "-0.02em", margin: 0 },
+  subtitle: { marginTop: "0.35rem", opacity: 0.55, marginBottom: "1.5rem", fontSize: "0.95rem" },
 
   tabRow: { display: "flex", gap: "0.6rem", marginBottom: "1.25rem", flexWrap: "wrap" },
   tabBtn: {

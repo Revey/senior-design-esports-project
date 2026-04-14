@@ -15,8 +15,17 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Senior Design Esports Project",
-  description: "CSU Vikes esports stats prototype",
+  title: {
+    default: "CollegeRankers — CSU Esports Hub",
+    template: "%s | CollegeRankers",
+  },
+  description: "Collegiate esports stats for Cleveland State University. Track Valorant and League of Legends teams, players, and tournament results.",
+  openGraph: {
+    title: "CollegeRankers — CSU Esports Hub",
+    description: "Collegiate esports stats for Cleveland State University.",
+    siteName: "CollegeRankers",
+    type: "website",
+  },
 };
 
 export default function RootLayout({
