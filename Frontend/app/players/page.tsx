@@ -2,6 +2,7 @@
 
 import { useEffect, useState, Suspense } from "react";
 import type { CSSProperties } from "react";
+import Link from "next/link";
 
 type PlayerStats = {
   kd?: number;
@@ -46,6 +47,7 @@ function ratingColor(r: number): string {
 
 function PlayersContent() {
   const [players, setPlayers] = useState<Player[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [game, setGame] = useState<GameFilter>("All");
   const [role, setRole] = useState("All");
@@ -56,6 +58,7 @@ function PlayersContent() {
 
   useEffect(() => {
     setError(null);
+    setLoaded(false);
     const params = new URLSearchParams({ sort: sortField, order: sortOrder, limit: "100" });
     if (game !== "All") params.set("game", game);
     if (role !== "All") params.set("role", role);
@@ -65,7 +68,10 @@ function PlayersContent() {
         if (!r.ok) throw new Error(`Failed to load players (${r.status})`);
         return r.json() as Promise<Player[]>;
       })
-      .then(setPlayers)
+      .then((data) => {
+        setPlayers(data);
+        setLoaded(true);
+      })
       .catch((e: Error) => setError(e.message));
   }, [game, role, sortField, sortOrder]);
 
@@ -161,11 +167,17 @@ function PlayersContent() {
           </div>
         </div>
 
-        {players.length === 0 && !error && (
+        {!loaded && !error && (
           <div style={{ padding: "1rem", display: "flex", flexDirection: "column", gap: "0.6rem" }}>
             {[...Array(8)].map((_, i) => (
               <div key={i} className="skeleton-line" style={{ height: "40px", opacity: 1 - i * 0.08 }} />
             ))}
+          </div>
+        )}
+
+        {loaded && players.length === 0 && !error && (
+          <div style={{ padding: "2.5rem 1rem", textAlign: "center", opacity: 0.5 }}>
+            No players match these filters.
           </div>
         )}
 
@@ -179,7 +191,13 @@ function PlayersContent() {
                 </span>
               </div>
               <div style={s.nameCol}>
-                <span style={{ fontWeight: 600 }}>{p.name}</span>
+                <Link
+                  href={`/players/${p.slug}`}
+                  style={{ fontWeight: 600, color: "white", textDecoration: "none" }}
+                  className="player-link"
+                >
+                  {p.name}
+                </Link>
                 <span
                   style={{
                     ...s.gameBadge,

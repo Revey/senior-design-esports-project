@@ -162,6 +162,7 @@ class LeagueCreate(BaseModel):
     abbreviation: str
     game: Literal["Valorant", "League of Legends"]
     season: str = ""
+    conference: Optional[str] = None  # e.g. "NECC", "NACE", "Riot"
 
 
 class MatchCreate(BaseModel):
@@ -262,6 +263,7 @@ def create_league(req: LeagueCreate):
         "slug": slug,
         "game": req.game,
         "season": req.season.strip() or "",
+        "conference": (req.conference or "").strip() or None,
         "description": "",
         "standings": [],
         "createdAt": datetime.now(timezone.utc).isoformat(),
@@ -535,3 +537,107 @@ def create_match(req: MatchCreate):
     _apply_record_update(db, t1["_id"], winner_id == t1["_id"], req.team1Score, req.team2Score)
     _apply_record_update(db, t2["_id"], winner_id == t2["_id"], req.team2Score, req.team1Score)
     return {"ok": True, "matchId": str(res.inserted_id), "winnerTeamId": str(winner_id)}
+
+
+# ---------- match edit / delete ----------
+
+def _reverse_record_update(db, team_id: ObjectId, won: bool, map_wins: int, map_losses: int):
+    """Undo a prior _apply_record_update."""
+    inc = {
+        "wins": -1 if won else 0,
+        "losses": 0 if won else -1,
+        "mapWins": -map_wins,
+        "mapLosses": -map_losses,
+    }
+    db["teams"].update_one({"_id": team_id}, {"$inc": inc})
+
+
+class MatchScorePatch(BaseModel):
+    team1Score: int
+    team2Score: int
+
+
+@router.patch("/matches/{match_id}", dependencies=[Depends(require_admin)])
+def update_match(match_id: str, req: MatchScorePatch):
+    """Correct a mis-entered series score. Adjusts team W/L counters accordingly.
+
+    Limited to series-level score edits (the common "wrong number on the scoreboard"
+    case). Per-map / per-player edits still require a delete + re-insert.
+    """
+    db = _db()
+    oid = _oid(match_id)
+    match = db["matches"].find_one({"_id": oid})
+    if not match:
+        raise HTTPException(404, "Match not found")
+
+    t1_id = match["team1Id"]
+    t2_id = match["team2Id"]
+    old_t1 = int(match.get("team1Score", 0))
+    old_t2 = int(match.get("team2Score", 0))
+    old_winner = match.get("winnerTeamId")
+
+    # Reverse old deltas.
+    _reverse_record_update(db, t1_id, old_winner == t1_id, old_t1, old_t2)
+    _reverse_record_update(db, t2_id, old_winner == t2_id, old_t2, old_t1)
+
+    # Apply new.
+    if req.team1Score == req.team2Score:
+        raise HTTPException(400, "Scores cannot be tied")
+    new_winner = t1_id if req.team1Score > req.team2Score else t2_id
+    db["matches"].update_one(
+        {"_id": oid},
+        {"$set": {
+            "team1Score": req.team1Score,
+            "team2Score": req.team2Score,
+            "winnerTeamId": new_winner,
+        }},
+    )
+    _apply_record_update(db, t1_id, new_winner == t1_id, req.team1Score, req.team2Score)
+    _apply_record_update(db, t2_id, new_winner == t2_id, req.team2Score, req.team1Score)
+    return {"ok": True, "matchId": str(oid), "winnerTeamId": str(new_winner)}
+
+
+@router.delete("/matches/{match_id}", dependencies=[Depends(require_admin)])
+def delete_match(match_id: str):
+    """Hard-delete a match. Reverses team W/L and removes player stat rows."""
+    db = _db()
+    oid = _oid(match_id)
+    match = db["matches"].find_one({"_id": oid})
+    if not match:
+        raise HTTPException(404, "Match not found")
+
+    t1_id = match["team1Id"]
+    t2_id = match["team2Id"]
+    t1_score = int(match.get("team1Score", 0))
+    t2_score = int(match.get("team2Score", 0))
+    winner = match.get("winnerTeamId")
+
+    _reverse_record_update(db, t1_id, winner == t1_id, t1_score, t2_score)
+    _reverse_record_update(db, t2_id, winner == t2_id, t2_score, t1_score)
+
+    removed = db["player match stats"].delete_many({"matchId": oid}).deleted_count
+    db["matches"].delete_one({"_id": oid})
+    return {"ok": True, "deletedStatRows": removed}
+
+
+# ---------- admin dashboard stats ----------
+
+@router.get("/stats", dependencies=[Depends(require_admin)])
+def admin_stats():
+    db = _db()
+    recent = list(
+        db["matches"]
+        .find({}, {"maps": 0, "players": 0})
+        .sort("date", -1)
+        .limit(5)
+    )
+    return {
+        "counts": {
+            "matches": db["matches"].count_documents({}),
+            "players": db["players"].count_documents({}),
+            "teams": db["teams"].count_documents({}),
+            "schools": db["schools"].count_documents({}),
+            "leagues": db["leagues"].count_documents({}),
+        },
+        "recent_matches": [_doc(r) for r in recent],
+    }

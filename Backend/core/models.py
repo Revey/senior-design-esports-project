@@ -21,6 +21,9 @@ class LeagueResponse(BaseModel):
     season: str
     description: str
     standings: list[StandingEntry]
+    # Conference the league belongs to (e.g., "NECC", "NACE", "Riot"). Optional
+    # so legacy docs without the field still validate.
+    conference: Optional[str] = None
 
 
 class TournamentMatch(BaseModel):

@@ -80,10 +80,16 @@ function LeaguesContent() {
 
       {error && <p style={{ color: "#f87171" }}>{error}</p>}
 
-      {!league && !error && (
+      {!league && !error && leagues.length === 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
           <div className="skeleton-line" style={{ height: "110px" }} />
           <div className="skeleton-line" style={{ height: "240px" }} />
+        </div>
+      )}
+
+      {!league && !error && leagues.length > 0 && (
+        <div style={{ padding: "2.5rem 1rem", textAlign: "center", opacity: 0.5 }}>
+          No data for this league yet.
         </div>
       )}
 

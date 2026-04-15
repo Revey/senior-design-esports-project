@@ -67,12 +67,14 @@ function gameBadgeStyle(game: string): CSSProperties {
 
 function TournamentsContent() {
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<StatusFilter>("all");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     setError(null);
+    setLoaded(false);
     const params = new URLSearchParams();
     if (filter !== "all") params.set("status", filter);
 
@@ -81,7 +83,10 @@ function TournamentsContent() {
         if (!r.ok) throw new Error(`Failed to load tournaments (${r.status})`);
         return r.json() as Promise<Tournament[]>;
       })
-      .then(setTournaments)
+      .then((data) => {
+        setTournaments(data);
+        setLoaded(true);
+      })
       .catch((e: Error) => setError(e.message));
   }, [filter]);
 
@@ -126,11 +131,17 @@ function TournamentsContent() {
 
       {error && <p style={{ color: "#f87171" }}>{error}</p>}
 
-      {tournaments.length === 0 && !error && (
+      {!loaded && !error && (
         <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
           {[...Array(3)].map((_, i) => (
             <div key={i} className="skeleton-line" style={{ height: "140px", opacity: 1 - i * 0.2 }} />
           ))}
+        </div>
+      )}
+
+      {loaded && tournaments.length === 0 && !error && (
+        <div style={{ padding: "2.5rem 1rem", textAlign: "center", opacity: 0.5 }}>
+          No tournaments match this filter.
         </div>
       )}
 

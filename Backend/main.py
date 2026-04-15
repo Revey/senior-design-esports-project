@@ -15,9 +15,19 @@ import logging
 import os
 import certifi
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo import MongoClient
+
+try:
+    from slowapi import Limiter
+    from slowapi.errors import RateLimitExceeded
+    from slowapi.middleware import SlowAPIMiddleware
+    from slowapi.util import get_remote_address
+    from starlette.responses import JSONResponse
+    _HAS_SLOWAPI = True
+except ImportError:  # allows local dev without the dep installed
+    _HAS_SLOWAPI = False
 
 # Optional imports from your existing project structure.
 # Leave these in if those folders/files already exist in your repo.
@@ -55,6 +65,11 @@ try:
     from core.admin_router import router as admin_router
 except ImportError:
     admin_router = None
+
+try:
+    from core.matches_router import router as matches_router
+except ImportError:
+    matches_router = None
 
 
 # --------------------------------------------------------------------
@@ -105,14 +120,45 @@ app = FastAPI(
     version="0.1.0",
 )
 
+# --------------------------------------------------------------------
+# CORS — restrict to env-configured origins in prod
+# --------------------------------------------------------------------
+_env_origins = os.getenv("ALLOWED_ORIGINS", "")
+_allowed_origins: list[str]
+if _env_origins.strip():
+    _allowed_origins = [o.strip() for o in _env_origins.split(",") if o.strip()]
+else:
+    _allowed_origins = [
+        o.strip() for o in FRONTEND_ORIGIN.split(",") if o.strip()
+    ] + ["http://localhost:3000", "http://localhost:3001"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in FRONTEND_ORIGIN.split(",") if o.strip()]
-    + ["http://localhost:3000", "http://localhost:3001"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# --------------------------------------------------------------------
+# Rate limiting (slowapi) — 60 req/min/IP on public read endpoints
+# --------------------------------------------------------------------
+if _HAS_SLOWAPI:
+    _rate = os.getenv("RATE_LIMIT_DEFAULT", "60/minute")
+    limiter = Limiter(key_func=get_remote_address, default_limits=[_rate])
+    app.state.limiter = limiter
+
+    @app.exception_handler(RateLimitExceeded)
+    def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Rate limit exceeded. Slow down and try again shortly."},
+        )
+
+    app.add_middleware(SlowAPIMiddleware)
+else:
+    logger.warning("slowapi not installed — rate limiting disabled")
 
 
 # --------------------------------------------------------------------
@@ -173,6 +219,9 @@ if players_router is not None:
 if admin_router is not None:
     app.include_router(admin_router, prefix="/api/admin")
 
+if matches_router is not None:
+    app.include_router(matches_router, prefix="/api/matches")
+
 
 # --------------------------------------------------------------------
 # Basic routes
@@ -189,6 +238,20 @@ def health():
         return {"status": "healthy", "mongo": "connected"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"MongoDB error: {str(e)}")
+
+
+@app.get("/api/health")
+def api_health():
+    """Public health probe used by the frontend status indicator.
+
+    Always returns 200 so the frontend can render a status pill rather than
+    hitting an error boundary; the `db` field reflects MongoDB reachability.
+    """
+    try:
+        client.admin.command("ping")
+        return {"status": "ok", "db": "connected"}
+    except Exception as e:
+        return {"status": "degraded", "db": "disconnected", "error": str(e)}
 
 
 # --------------------------------------------------------------------

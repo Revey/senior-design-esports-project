@@ -2,6 +2,7 @@
 
 import { useEffect, useState, Suspense } from "react";
 import type { CSSProperties } from "react";
+import Link from "next/link";
 
 type TeamRecord = { wins: number; losses: number };
 type Team = {
@@ -35,6 +36,7 @@ function ratingColor(r: number): string {
 
 function TeamsContent() {
   const [teams, setTeams] = useState<Team[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [game, setGame] = useState<GameFilter>("All");
   const [sortField, setSortField] = useState<SortField>("rating");
@@ -42,6 +44,7 @@ function TeamsContent() {
 
   useEffect(() => {
     setError(null);
+    setLoaded(false);
     const params = new URLSearchParams({ sort: sortField, order: sortOrder, limit: "50" });
     if (game !== "All") params.set("game", game);
 
@@ -50,7 +53,10 @@ function TeamsContent() {
         if (!r.ok) throw new Error(`Failed to load teams (${r.status})`);
         return r.json() as Promise<Team[]>;
       })
-      .then(setTeams)
+      .then((data) => {
+        setTeams(data);
+        setLoaded(true);
+      })
       .catch((e: Error) => setError(e.message));
   }, [game, sortField, sortOrder]);
 
@@ -118,11 +124,17 @@ function TeamsContent() {
           </div>
         </div>
 
-        {teams.length === 0 && !error && (
+        {!loaded && !error && (
           <div style={{ padding: "1rem", display: "flex", flexDirection: "column", gap: "0.6rem" }}>
             {[...Array(6)].map((_, i) => (
               <div key={i} className="skeleton-line" style={{ height: "44px", opacity: 1 - i * 0.1 }} />
             ))}
+          </div>
+        )}
+
+        {loaded && teams.length === 0 && !error && (
+          <div style={{ padding: "2.5rem 1rem", textAlign: "center", opacity: 0.5 }}>
+            No teams match these filters.
           </div>
         )}
 
@@ -134,7 +146,13 @@ function TeamsContent() {
               </span>
             </div>
             <div style={s.nameCol}>
-              <span style={{ fontWeight: 600 }}>{t.name}</span>
+              <Link
+                href={`/teams/${t.slug}`}
+                style={{ fontWeight: 600, color: "white", textDecoration: "none" }}
+                className="team-link"
+              >
+                {t.name}
+              </Link>
             </div>
             <div style={{ ...s.schoolCol, opacity: 0.75 }}>{t.school}</div>
             <div style={s.gameCol}>
