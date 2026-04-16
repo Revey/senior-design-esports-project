@@ -51,11 +51,8 @@ export default function Footer() {
       lineHeight: 1.6,
     }}>
       <p>
-        CollegeRankers is not affiliated with or sponsored by Riot Games, Inc. or VALORANT Esports.
+        Campus Rankers is not affiliated with or sponsored by Riot Games, Inc. or VALORANT Esports.
         VALORANT and League of Legends are trademarks of Riot Games, Inc.
-      </p>
-      <p style={{ marginTop: "0.25rem" }}>
-        Cleveland State University Esports - Washkewicz College of Engineering
       </p>
       <p style={{ marginTop: "0.25rem", display: "flex", gap: "0.75rem", justifyContent: "center", alignItems: "center", flexWrap: "wrap" }}>
         <a href="/privacy" style={{ color: "rgba(255,255,255,0.5)", textDecoration: "underline" }}>
