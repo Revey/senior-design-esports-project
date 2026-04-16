@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import Typeahead from "../Typeahead";
 import { adminFetch, getToken, type Player, type Team } from "../adminClient";
 
 type GameFilter = "All" | "Valorant" | "League of Legends";
@@ -87,9 +88,9 @@ function TeamRow({ team }: { team: Team }) {
   const [expanded, setExpanded] = useState(false);
   const [players, setPlayers] = useState<Player[]>([]);
   const [loading, setLoading] = useState(false);
+  const [linkQuery, setLinkQuery] = useState("");
 
   async function loadPlayers() {
-    if (players.length > 0) return; // already loaded
     setLoading(true);
     try {
       const data = await adminFetch<Player[]>(
@@ -105,6 +106,31 @@ function TeamRow({ team }: { team: Team }) {
     if (!expanded) loadPlayers();
     setExpanded((v) => !v);
   }
+
+  async function unlinkPlayer(playerId: string) {
+    await adminFetch(`/api/admin/players/${playerId}/unlink`, {
+      method: "PATCH",
+      body: JSON.stringify({ teamId: team._id }),
+    });
+    await loadPlayers();
+  }
+
+  async function linkPlayer(player: Player) {
+    await adminFetch(`/api/admin/players/${player._id}/link`, {
+      method: "PATCH",
+      body: JSON.stringify({ teamId: team._id }),
+    });
+    setLinkQuery("");
+    await loadPlayers();
+  }
+
+  const searchPlayers = useCallback(
+    async (q: string) =>
+      adminFetch<Player[]>(
+        `/api/admin/players?q=${encodeURIComponent(q)}&limit=15`,
+      ),
+    [],
+  );
 
   const gameLabel = team.game === "Valorant" ? "VAL" : "LoL";
   const gameBadgeColor =
@@ -137,15 +163,14 @@ function TeamRow({ team }: { team: Team }) {
       </button>
 
       {expanded && (
-        <div className="border-t border-white/10 px-4 py-3">
-          <div className="text-xs text-white/40 mb-2 uppercase tracking-wide">
+        <div className="border-t border-white/10 px-4 py-3 space-y-3">
+          <div className="text-xs text-white/40 uppercase tracking-wide">
             Roster
           </div>
           {loading && <p className="text-xs text-white/40">Loading…</p>}
           {!loading && players.length === 0 && (
             <p className="text-xs text-white/40">
-              No players linked to this team yet. Use Manage Players to link
-              players.
+              No players linked to this team yet.
             </p>
           )}
           {!loading && players.length > 0 && (
@@ -162,15 +187,38 @@ function TeamRow({ team }: { team: Team }) {
                     </span>
                   )}
                   <span
-                    className={`text-xs ml-auto ${
+                    className={`text-xs ${
                       p.active ? "text-emerald-400" : "text-amber-400"
                     }`}
                   >
                     {p.active ? "active" : "free agent"}
                   </span>
+                  <button
+                    onClick={() => unlinkPlayer(p._id)}
+                    className="ml-auto text-xs px-2 py-0.5 rounded bg-red-600/20 text-red-400 hover:bg-red-600/40"
+                  >
+                    Unlink
+                  </button>
                 </li>
               ))}
             </ul>
+          )}
+          {!loading && (
+            <div>
+              <div className="text-xs text-white/40 mb-1">Link a player</div>
+              <Typeahead<Player>
+                placeholder="Search by name or Riot ID…"
+                value={linkQuery}
+                onChange={setLinkQuery}
+                fetcher={searchPlayers}
+                render={(pl) =>
+                  `${pl.displayName}${pl.riotId ? ` (${pl.riotId})` : ""}${
+                    pl.active === false ? " — free agent" : ""
+                  }`
+                }
+                onSelect={linkPlayer}
+              />
+            </div>
           )}
         </div>
       )}

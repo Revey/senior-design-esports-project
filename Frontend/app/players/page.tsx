@@ -53,6 +53,7 @@ function PlayersContent() {
   const [role, setRole] = useState("All");
   const [sortField, setSortField] = useState("rating");
   const [sortOrder, setSortOrder] = useState<"desc" | "asc">("desc");
+  const [search, setSearch] = useState("");
 
   const roles = game === "League of Legends" ? LOL_ROLES : game === "Valorant" ? VAL_ROLES : [];
 
@@ -94,6 +95,10 @@ function PlayersContent() {
 
   const activeColor = GAME_TABS.find((t) => t.label === game)!.color;
   const isVal = game === "Valorant" || game === "All";
+  const needle = search.toLowerCase();
+  const filteredPlayers = needle
+    ? players.filter((p) => p.name.toLowerCase().includes(needle) || p.team_name.toLowerCase().includes(needle))
+    : players;
 
   return (
     <main style={s.container}>
@@ -143,6 +148,14 @@ function PlayersContent() {
         </div>
       )}
 
+      {/* Search */}
+      <input
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Search player or team…"
+        style={s.searchInput}
+      />
+
       {error && <p style={{ color: "#f87171" }}>{error}</p>}
 
       {/* Player table */}
@@ -175,13 +188,13 @@ function PlayersContent() {
           </div>
         )}
 
-        {loaded && players.length === 0 && !error && (
+        {loaded && filteredPlayers.length === 0 && !error && (
           <div style={{ padding: "2.5rem 1rem", textAlign: "center", opacity: 0.5 }}>
-            No players match these filters.
+            {search ? "No players match your search." : "No players match these filters."}
           </div>
         )}
 
-        {players.map((p, i) => {
+        {filteredPlayers.map((p, i) => {
           const isValPlayer = p.game === "Valorant";
           return (
             <div key={p.slug} className="data-row row-enter" style={{ ...s.row, animationDelay: `${i * 0.025}s` }}>
@@ -248,6 +261,18 @@ const s: Record<string, CSSProperties> = {
   title: { fontSize: "clamp(1.6rem, 3vw, 2.2rem)", fontWeight: 700, letterSpacing: "-0.02em", margin: 0 },
   subtitle: { marginTop: "0.35rem", opacity: 0.55, marginBottom: "1.5rem", fontSize: "0.95rem" },
 
+  searchInput: {
+    width: "100%",
+    maxWidth: 360,
+    padding: "0.55rem 0.9rem",
+    borderRadius: 10,
+    border: "1px solid rgba(255,255,255,0.15)",
+    background: "rgba(255,255,255,0.05)",
+    color: "white",
+    fontSize: "0.9rem",
+    marginBottom: "1rem",
+    outline: "none",
+  },
   tabRow: { display: "flex", gap: "0.6rem", marginBottom: "1rem", flexWrap: "wrap" },
   tabBtn: {
     padding: "0.55rem 1.5rem",

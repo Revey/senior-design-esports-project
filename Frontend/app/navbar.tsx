@@ -10,6 +10,7 @@ const navItems = [
   { label: "Tournaments", href: "/tournaments" },
   { label: "Teams", href: "/teams" },
   { label: "Players", href: "/players" },
+  { label: "Matches", href: "/matches" },
   { label: "About", href: "/about" },
   { label: "Connect Riot", href: "/valorant/auth" },
 ];

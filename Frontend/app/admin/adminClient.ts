@@ -31,6 +31,9 @@ export async function adminFetch<T = unknown>(
   if (res.status === 401) {
     clearToken();
     if (typeof window !== "undefined") {
+      const returnTo = window.location.pathname + window.location.search;
+      sessionStorage.setItem("admin_return", returnTo);
+      alert("Your session has expired — please log in again.");
       window.location.href = "/admin/login";
     }
     throw new Error("Unauthorized");

@@ -19,6 +19,7 @@ from typing import Any, Literal, Optional
 from bson import ObjectId
 from bson.errors import InvalidId
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from pymongo.errors import DuplicateKeyError
 from pydantic import BaseModel, Field
 
 from core.db import get_db
@@ -92,6 +93,24 @@ def _db():
     if db is None:
         raise HTTPException(status_code=500, detail="Database not configured")
     return db
+
+
+def _ensure_match_index():
+    """Idempotent: create a unique index to prevent duplicate match entries."""
+    try:
+        db = get_db()
+        if db is not None:
+            db["matches"].create_index(
+                [("team1Id", 1), ("team2Id", 1), ("date", 1), ("game", 1)],
+                unique=True,
+                name="dup_match_guard",
+                background=True,
+            )
+    except Exception:
+        pass  # non-fatal — guard is advisory
+
+
+_ensure_match_index()
 
 
 # ---------- models ----------
@@ -449,7 +468,10 @@ def create_match(req: MatchCreate):
             "leagueName": league_name,
             "maps": [m.model_dump() for m in req.maps],
         }
-        res = db["matches"].insert_one(match_doc)
+        try:
+            res = db["matches"].insert_one(match_doc)
+        except DuplicateKeyError:
+            raise HTTPException(409, "A match between these teams on this date already exists")
 
         # per-player stats rows
         pms_rows = []
@@ -505,7 +527,10 @@ def create_match(req: MatchCreate):
             "team2": [p.model_dump() for p in req.lolTeam2Players],
         },
     }
-    res = db["matches"].insert_one(match_doc)
+    try:
+        res = db["matches"].insert_one(match_doc)
+    except DuplicateKeyError:
+        raise HTTPException(409, "A match between these teams on this date already exists")
 
     pms_rows = []
     for side, players in (("team1", req.lolTeam1Players), ("team2", req.lolTeam2Players)):

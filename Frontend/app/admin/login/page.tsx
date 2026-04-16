@@ -26,7 +26,11 @@ export default function AdminLoginPage() {
       }
       const data = (await res.json()) as { token: string };
       setToken(data.token);
-      router.push("/admin");
+      const returnTo = typeof window !== "undefined"
+        ? sessionStorage.getItem("admin_return") || "/admin"
+        : "/admin";
+      if (typeof window !== "undefined") sessionStorage.removeItem("admin_return");
+      router.push(returnTo);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
     } finally {

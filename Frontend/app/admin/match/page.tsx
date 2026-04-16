@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Typeahead from "../Typeahead";
@@ -126,6 +126,54 @@ export default function MatchEntryPage() {
     Array.from({ length: 5 }, BLANK_LOL_PLAYER),
   );
 
+  // Auto-populate players when a team is selected.
+  // Keeps a roster cache so we can offer a swap picker.
+  const [roster1, setRoster1] = useState<Player[]>([]);
+  const [roster2, setRoster2] = useState<Player[]>([]);
+
+  useEffect(() => {
+    if (!team1?._id) { setRoster1([]); return; }
+    fetchAllPlayersForTeam(team1._id).then((players) => {
+      setRoster1(players);
+      prefillPlayers(players, "team1");
+    }).catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [team1?._id]);
+
+  useEffect(() => {
+    if (!team2?._id) { setRoster2([]); return; }
+    fetchAllPlayersForTeam(team2._id).then((players) => {
+      setRoster2(players);
+      prefillPlayers(players, "team2");
+    }).catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [team2?._id]);
+
+  function prefillPlayers(players: Player[], side: "team1" | "team2") {
+    const first5 = players.slice(0, 5);
+    if (game === "Valorant") {
+      setMaps((prev) =>
+        prev.map((m) => {
+          const key = side === "team1" ? "team1Players" : "team2Players";
+          const filled = Array.from({ length: 5 }, (_, i) => {
+            const p = first5[i];
+            if (!p) return BLANK_VAL_PLAYER();
+            return { ...BLANK_VAL_PLAYER(), playerId: p._id, playerLabel: p.displayName, playerQuery: p.displayName };
+          });
+          return { ...m, [key]: filled };
+        }),
+      );
+    } else {
+      const filled = Array.from({ length: 5 }, (_, i) => {
+        const p = first5[i];
+        if (!p) return BLANK_LOL_PLAYER();
+        return { ...BLANK_LOL_PLAYER(), playerId: p._id, playerLabel: p.displayName, playerQuery: p.displayName };
+      });
+      if (side === "team1") setLolT1Players(filled);
+      else setLolT2Players(filled);
+    }
+  }
+
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -198,10 +246,18 @@ export default function MatchEntryPage() {
     [game],
   );
 
-  const fetchPlayersForTeam = useCallback(
-    (teamId: string | undefined) => async (q: string) =>
+  const fetchPlayersRaw = useCallback(
+    (teamId: string | undefined, q: string) =>
       adminFetch<Player[]>(
         `/api/admin/players?${teamId ? `teamId=${teamId}&` : ""}q=${encodeURIComponent(q)}&limit=15`,
+      ),
+    [],
+  );
+
+  const fetchAllPlayersForTeam = useCallback(
+    (teamId: string) =>
+      adminFetch<Player[]>(
+        `/api/admin/players?teamId=${teamId}&limit=20`,
       ),
     [],
   );
@@ -388,7 +444,9 @@ export default function MatchEntryPage() {
             setMaps={setMaps}
             team1={team1}
             team2={team2}
-            fetchPlayersForTeam={fetchPlayersForTeam}
+            fetchPlayersRaw={fetchPlayersRaw}
+            roster1={roster1}
+            roster2={roster2}
           />
         ) : (
           <LolSeries
@@ -402,7 +460,9 @@ export default function MatchEntryPage() {
             setT2Players={setLolT2Players}
             team1={team1}
             team2={team2}
-            fetchPlayersForTeam={fetchPlayersForTeam}
+            fetchPlayersRaw={fetchPlayersRaw}
+            roster1={roster1}
+            roster2={roster2}
           />
         )}
 
@@ -521,16 +581,27 @@ function ValorantMaps({
   setMaps,
   team1,
   team2,
-  fetchPlayersForTeam,
+  fetchPlayersRaw,
+  roster1,
+  roster2,
 }: {
   maps: ValMapState[];
   setMaps: (m: ValMapState[]) => void;
   team1: Team | null;
   team2: Team | null;
-  fetchPlayersForTeam: (
-    teamId: string | undefined,
-  ) => (q: string) => Promise<Player[]>;
+  fetchPlayersRaw: (teamId: string | undefined, q: string) => Promise<Player[]>;
+  roster1: Player[];
+  roster2: Player[];
 }) {
+  const fetcher1 = useMemo(
+    () => (q: string) => fetchPlayersRaw(team1?._id, q),
+    [fetchPlayersRaw, team1?._id],
+  );
+  const fetcher2 = useMemo(
+    () => (q: string) => fetchPlayersRaw(team2?._id, q),
+    [fetchPlayersRaw, team2?._id],
+  );
+
   function update(i: number, next: Partial<ValMapState>) {
     setMaps(maps.map((m, idx) => (idx === i ? { ...m, ...next } : m)));
   }
@@ -588,13 +659,15 @@ function ValorantMaps({
             label={team1?.teamName ?? "Team 1"}
             players={m.team1Players}
             setPlayers={(pl) => update(i, { team1Players: pl })}
-            fetchPlayers={fetchPlayersForTeam(team1?._id)}
+            fetchPlayers={fetcher1}
+            roster={roster1}
           />
           <ValPlayerTable
             label={team2?.teamName ?? "Team 2"}
             players={m.team2Players}
             setPlayers={(pl) => update(i, { team2Players: pl })}
-            fetchPlayers={fetchPlayersForTeam(team2?._id)}
+            fetchPlayers={fetcher2}
+            roster={roster2}
           />
         </div>
       ))}
@@ -614,31 +687,53 @@ function ValPlayerTable({
   players,
   setPlayers,
   fetchPlayers,
+  roster,
 }: {
   label: string;
   players: ValPlayerRow[];
   setPlayers: (p: ValPlayerRow[]) => void;
   fetchPlayers: (q: string) => Promise<Player[]>;
+  roster: Player[];
 }) {
   function update(i: number, next: Partial<ValPlayerRow>) {
     setPlayers(players.map((p, idx) => (idx === i ? { ...p, ...next } : p)));
   }
+
+  function swapPlayer(i: number, pl: Player) {
+    update(i, {
+      playerId: pl._id,
+      playerLabel: pl.displayName,
+      playerQuery: pl.displayName,
+    });
+  }
+
+  const selectedIds = new Set(players.map((p) => p.playerId).filter(Boolean));
+  const bench = roster.filter((p) => !selectedIds.has(p._id));
+
   return (
     <div>
-      <div className="text-sm font-medium mb-2">{label}</div>
+      <div className="flex items-center gap-3 mb-2">
+        <span className="text-sm font-medium">{label}</span>
+        {bench.length > 0 && (
+          <span className="text-xs text-white/40">
+            Bench: {bench.map((b) => b.displayName).join(", ")}
+          </span>
+        )}
+      </div>
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
           <thead className="text-white/50">
             <tr>
               <th className="text-left py-1">Player</th>
               <th className="text-left">Agent</th>
+              <th>ACS</th>
               <th>K</th>
               <th>D</th>
               <th>A</th>
-              <th>ACS</th>
               <th>FK</th>
               <th>Plants</th>
               <th>Defuses</th>
+              {bench.length > 0 && <th></th>}
             </tr>
           </thead>
           <tbody>
@@ -667,7 +762,7 @@ function ValPlayerTable({
                     className="w-24 px-2 py-1 rounded bg-black/40 border border-white/20"
                   />
                 </td>
-                {(["kills", "deaths", "assists", "acs", "firstKills", "plants", "defuses"] as const).map(
+                {(["acs", "kills", "deaths", "assists", "firstKills", "plants", "defuses"] as const).map(
                   (k) => (
                     <td key={k} className="text-center">
                       <input
@@ -680,6 +775,25 @@ function ValPlayerTable({
                       />
                     </td>
                   ),
+                )}
+                {bench.length > 0 && (
+                  <td className="pl-1">
+                    <select
+                      value=""
+                      onChange={(e) => {
+                        const sub = bench.find((b) => b._id === e.target.value);
+                        if (sub) swapPlayer(i, sub);
+                      }}
+                      className="w-20 text-xs px-1 py-1 rounded bg-black/40 border border-white/20 text-white/60"
+                    >
+                      <option value="">Swap</option>
+                      {bench.map((b) => (
+                        <option key={b._id} value={b._id}>
+                          {b.displayName}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
                 )}
               </tr>
             ))}
@@ -703,7 +817,9 @@ function LolSeries({
   setT2Players,
   team1,
   team2,
-  fetchPlayersForTeam,
+  fetchPlayersRaw,
+  roster1,
+  roster2,
 }: {
   t1Score: number;
   t2Score: number;
@@ -715,10 +831,19 @@ function LolSeries({
   setT2Players: (p: LolPlayerRow[]) => void;
   team1: Team | null;
   team2: Team | null;
-  fetchPlayersForTeam: (
-    teamId: string | undefined,
-  ) => (q: string) => Promise<Player[]>;
+  fetchPlayersRaw: (teamId: string | undefined, q: string) => Promise<Player[]>;
+  roster1: Player[];
+  roster2: Player[];
 }) {
+  const fetcher1 = useMemo(
+    () => (q: string) => fetchPlayersRaw(team1?._id, q),
+    [fetchPlayersRaw, team1?._id],
+  );
+  const fetcher2 = useMemo(
+    () => (q: string) => fetchPlayersRaw(team2?._id, q),
+    [fetchPlayersRaw, team2?._id],
+  );
+
   return (
     <section className="space-y-6">
       <div className="p-5 rounded-xl border border-white/10 bg-white/5 space-y-4">
@@ -749,13 +874,15 @@ function LolSeries({
           label={team1?.teamName ?? "Team 1"}
           players={t1Players}
           setPlayers={setT1Players}
-          fetchPlayers={fetchPlayersForTeam(team1?._id)}
+          fetchPlayers={fetcher1}
+          roster={roster1}
         />
         <LolPlayerTable
           label={team2?.teamName ?? "Team 2"}
           players={t2Players}
           setPlayers={setT2Players}
-          fetchPlayers={fetchPlayersForTeam(team2?._id)}
+          fetchPlayers={fetcher2}
+          roster={roster2}
         />
       </div>
     </section>
@@ -767,18 +894,39 @@ function LolPlayerTable({
   players,
   setPlayers,
   fetchPlayers,
+  roster,
 }: {
   label: string;
   players: LolPlayerRow[];
   setPlayers: (p: LolPlayerRow[]) => void;
   fetchPlayers: (q: string) => Promise<Player[]>;
+  roster: Player[];
 }) {
   function update(i: number, next: Partial<LolPlayerRow>) {
     setPlayers(players.map((p, idx) => (idx === i ? { ...p, ...next } : p)));
   }
+
+  function swapPlayer(i: number, pl: Player) {
+    update(i, {
+      playerId: pl._id,
+      playerLabel: pl.displayName,
+      playerQuery: pl.displayName,
+    });
+  }
+
+  const selectedIds = new Set(players.map((p) => p.playerId).filter(Boolean));
+  const bench = roster.filter((p) => !selectedIds.has(p._id));
+
   return (
     <div>
-      <div className="text-sm font-medium mb-2">{label}</div>
+      <div className="flex items-center gap-3 mb-2">
+        <span className="text-sm font-medium">{label}</span>
+        {bench.length > 0 && (
+          <span className="text-xs text-white/40">
+            Bench: {bench.map((b) => b.displayName).join(", ")}
+          </span>
+        )}
+      </div>
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
           <thead className="text-white/50">
@@ -794,6 +942,7 @@ function LolPlayerTable({
               <th>Dmg</th>
               <th>Vision</th>
               <th>Wards</th>
+              {bench.length > 0 && <th></th>}
             </tr>
           </thead>
           <tbody>
@@ -842,6 +991,25 @@ function LolPlayerTable({
                       />
                     </td>
                   ),
+                )}
+                {bench.length > 0 && (
+                  <td className="pl-1">
+                    <select
+                      value=""
+                      onChange={(e) => {
+                        const sub = bench.find((b) => b._id === e.target.value);
+                        if (sub) swapPlayer(i, sub);
+                      }}
+                      className="w-20 text-xs px-1 py-1 rounded bg-black/40 border border-white/20 text-white/60"
+                    >
+                      <option value="">Swap</option>
+                      {bench.map((b) => (
+                        <option key={b._id} value={b._id}>
+                          {b.displayName}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
                 )}
               </tr>
             ))}

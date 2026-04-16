@@ -41,6 +41,7 @@ function TeamsContent() {
   const [game, setGame] = useState<GameFilter>("All");
   const [sortField, setSortField] = useState<SortField>("rating");
   const [sortOrder, setSortOrder] = useState<"desc" | "asc">("desc");
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
     setError(null);
@@ -75,6 +76,10 @@ function TeamsContent() {
   }
 
   const activeColor = GAME_TABS.find((t) => t.label === game)!.color;
+  const needle = search.toLowerCase();
+  const filteredTeams = needle
+    ? teams.filter((t) => t.name.toLowerCase().includes(needle) || t.school.toLowerCase().includes(needle))
+    : teams;
 
   return (
     <main style={s.container}>
@@ -104,6 +109,14 @@ function TeamsContent() {
         })}
       </div>
 
+      {/* Search */}
+      <input
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Search team or school…"
+        style={s.searchInput}
+      />
+
       {error && <p style={{ color: "#f87171" }}>{error}</p>}
 
       {/* Rankings table */}
@@ -132,13 +145,13 @@ function TeamsContent() {
           </div>
         )}
 
-        {loaded && teams.length === 0 && !error && (
+        {loaded && filteredTeams.length === 0 && !error && (
           <div style={{ padding: "2.5rem 1rem", textAlign: "center", opacity: 0.5 }}>
-            No teams match these filters.
+            {search ? "No teams match your search." : "No teams match these filters."}
           </div>
         )}
 
-        {teams.map((t, i) => (
+        {filteredTeams.map((t, i) => (
           <div key={t.slug} className="data-row row-enter" style={{ ...s.row, animationDelay: `${i * 0.03}s` }}>
             <div style={s.rankCol}>
               <span style={{ ...s.rankBadge, background: i < 3 ? activeColor : "rgba(255,255,255,0.08)" }}>
@@ -194,6 +207,18 @@ const s: Record<string, CSSProperties> = {
   title: { fontSize: "clamp(1.6rem, 3vw, 2.2rem)", fontWeight: 700, letterSpacing: "-0.02em", margin: 0 },
   subtitle: { marginTop: "0.35rem", opacity: 0.55, marginBottom: "1.5rem", fontSize: "0.95rem" },
 
+  searchInput: {
+    width: "100%",
+    maxWidth: 360,
+    padding: "0.55rem 0.9rem",
+    borderRadius: 10,
+    border: "1px solid rgba(255,255,255,0.15)",
+    background: "rgba(255,255,255,0.05)",
+    color: "white",
+    fontSize: "0.9rem",
+    marginBottom: "1rem",
+    outline: "none",
+  },
   tabRow: { display: "flex", gap: "0.6rem", marginBottom: "1.25rem", flexWrap: "wrap" },
   tabBtn: {
     padding: "0.55rem 1.5rem",
