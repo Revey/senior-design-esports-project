@@ -4,9 +4,16 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Typeahead from "../Typeahead";
-import { adminFetch, getToken, type Player, type Team } from "../adminClient";
+import {
+  adminFetch,
+  getToken,
+  type Player,
+  type School,
+  type Team,
+} from "../adminClient";
 
 type GameFilter = "All" | "Valorant" | "League of Legends";
+type Game = "Valorant" | "League of Legends";
 
 export default function TeamsAdmin() {
   const router = useRouter();
@@ -14,6 +21,7 @@ export default function TeamsAdmin() {
   const [teams, setTeams] = useState<Team[]>([]);
   const [query, setQuery] = useState("");
   const [gameFilter, setGameFilter] = useState<GameFilter>("All");
+  const [showCreate, setShowCreate] = useState(false);
 
   useEffect(() => {
     if (!getToken()) router.replace("/admin/login");
@@ -40,7 +48,15 @@ export default function TeamsAdmin() {
         <Link href="/admin" className="text-sm text-white/60 hover:text-white">
           ← Back
         </Link>
-        <h1 className="text-2xl font-bold mt-2 mb-6">Teams</h1>
+        <div className="flex items-center justify-between mt-2 mb-6 gap-4 flex-wrap">
+          <h1 className="text-2xl font-bold">Teams</h1>
+          <button
+            onClick={() => setShowCreate(true)}
+            className="px-4 py-2 rounded bg-white text-black text-sm font-semibold hover:bg-white/90"
+          >
+            + Create Team
+          </button>
+        </div>
 
         <div className="flex flex-wrap gap-3 mb-4">
           <input
@@ -74,15 +90,270 @@ export default function TeamsAdmin() {
           ))}
           {teams.length === 0 && (
             <p className="text-white/50 text-sm">
-              No teams found. Teams are created automatically when entering a
-              match — use the Enter Match page to add new teams.
+              No teams found. Use “+ Create Team” to add one, or the Enter
+              Match page to create teams on the fly.
             </p>
           )}
         </div>
       </div>
+
+      {showCreate && (
+        <CreateTeamModal
+          onClose={() => setShowCreate(false)}
+          onCreated={() => {
+            setShowCreate(false);
+            reload();
+          }}
+        />
+      )}
     </main>
   );
 }
+
+// ---------- Create Team modal ----------
+
+type PlayerRow = {
+  displayName: string;
+  riotId: string;
+  role: string;
+};
+
+const blankPlayer = (): PlayerRow => ({
+  displayName: "",
+  riotId: "",
+  role: "",
+});
+
+function CreateTeamModal({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [schoolQ, setSchoolQ] = useState("");
+  const [school, setSchool] = useState<School | null>(null);
+  const [teamName, setTeamName] = useState("");
+  const [game, setGame] = useState<Game>("Valorant");
+  const [players, setPlayers] = useState<PlayerRow[]>([blankPlayer()]);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  const fetchSchools = useCallback(
+    async (q: string) =>
+      adminFetch<School[]>(
+        `/api/admin/schools?q=${encodeURIComponent(q)}&limit=10`,
+      ),
+    [],
+  );
+
+  const createSchool = useCallback(
+    async (name: string) =>
+      adminFetch<School>(`/api/admin/schools`, {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      }),
+    [],
+  );
+
+  function setPlayer(i: number, patch: Partial<PlayerRow>) {
+    setPlayers((prev) =>
+      prev.map((p, idx) => (idx === i ? { ...p, ...patch } : p)),
+    );
+  }
+
+  function addPlayer() {
+    setPlayers((prev) => [...prev, blankPlayer()]);
+  }
+
+  function removePlayer(i: number) {
+    setPlayers((prev) =>
+      prev.length === 1 ? [blankPlayer()] : prev.filter((_, idx) => idx !== i),
+    );
+  }
+
+  async function submit() {
+    setError("");
+    if (!school) {
+      setError("Select or create a school first.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const finalName = teamName.trim() || school.name;
+      const team = await adminFetch<Team>(`/api/admin/teams`, {
+        method: "POST",
+        body: JSON.stringify({
+          schoolId: school._id,
+          name: finalName,
+          game,
+        }),
+      });
+      const validPlayers = players.filter((p) => p.displayName.trim());
+      for (const p of validPlayers) {
+        await adminFetch(`/api/admin/players`, {
+          method: "POST",
+          body: JSON.stringify({
+            displayName: p.displayName.trim(),
+            riotId: p.riotId.trim() || null,
+            role: p.role.trim() || null,
+            teamIds: [team._id],
+          }),
+        });
+      }
+      onCreated();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create team");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-30 bg-black/70 flex items-start justify-center overflow-y-auto py-10 px-4">
+      <div className="w-full max-w-xl rounded-lg border border-white/15 bg-neutral-900 p-6 shadow-xl">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold">Create Team</h2>
+          <button
+            onClick={onClose}
+            className="text-white/60 hover:text-white text-2xl leading-none"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs text-white/50 mb-1">
+              School *
+            </label>
+            <Typeahead<School>
+              placeholder="School name…"
+              value={schoolQ}
+              onChange={(v) => {
+                setSchoolQ(v);
+                if (school && v !== school.name) setSchool(null);
+              }}
+              fetcher={fetchSchools}
+              render={(s) => s.name}
+              onSelect={(s) => {
+                setSchool(s);
+                setSchoolQ(s.name);
+              }}
+              onCreate={createSchool}
+              createLabel={(q) => `+ Create school "${q}"`}
+            />
+            {school && (
+              <p className="text-xs text-emerald-400 mt-1">
+                Selected: {school.name}
+              </p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-xs text-white/50 mb-1">
+              Team name (optional — defaults to school name)
+            </label>
+            <input
+              value={teamName}
+              onChange={(e) => setTeamName(e.target.value)}
+              placeholder={school?.name || "Team name"}
+              className="w-full px-3 py-2 rounded bg-black/40 border border-white/20"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs text-white/50 mb-1">Game *</label>
+            <select
+              value={game}
+              onChange={(e) => setGame(e.target.value as Game)}
+              className="w-full px-3 py-2 rounded bg-black/40 border border-white/20"
+            >
+              <option>Valorant</option>
+              <option>League of Legends</option>
+            </select>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs text-white/50">
+                Roster (optional) — adds to {game === "Valorant" ? "Valorant" : "LoL"} roster
+              </label>
+              <button
+                type="button"
+                onClick={addPlayer}
+                className="text-xs text-emerald-400 hover:text-emerald-300"
+              >
+                + Add player
+              </button>
+            </div>
+            <div className="space-y-2">
+              {players.map((p, i) => (
+                <div
+                  key={i}
+                  className="grid grid-cols-[1fr_1fr_110px_auto] gap-2 items-center"
+                >
+                  <input
+                    placeholder="Display name"
+                    value={p.displayName}
+                    onChange={(e) =>
+                      setPlayer(i, { displayName: e.target.value })
+                    }
+                    className="px-2 py-1.5 text-sm rounded bg-black/40 border border-white/20"
+                  />
+                  <input
+                    placeholder="Riot IGN#Tag"
+                    value={p.riotId}
+                    onChange={(e) => setPlayer(i, { riotId: e.target.value })}
+                    className="px-2 py-1.5 text-sm rounded bg-black/40 border border-white/20"
+                  />
+                  <input
+                    placeholder="Role"
+                    value={p.role}
+                    onChange={(e) => setPlayer(i, { role: e.target.value })}
+                    className="px-2 py-1.5 text-sm rounded bg-black/40 border border-white/20"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removePlayer(i)}
+                    className="text-red-400 hover:text-red-300 text-lg leading-none px-2"
+                    aria-label="Remove player"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-white/40 mt-2">
+              Rows with an empty display name are skipped.
+            </p>
+          </div>
+
+          {error && <p className="text-sm text-red-400">{error}</p>}
+
+          <div className="flex justify-end gap-2 pt-2">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 rounded border border-white/20 text-sm hover:bg-white/5"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={submit}
+              disabled={submitting || !school}
+              className="px-4 py-2 rounded bg-white text-black text-sm font-semibold hover:bg-white/90 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {submitting ? "Creating…" : "Create team"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------- existing team row ----------
 
 function TeamRow({ team }: { team: Team }) {
   const [expanded, setExpanded] = useState(false);
