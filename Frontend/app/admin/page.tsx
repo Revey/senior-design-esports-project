@@ -22,7 +22,8 @@ type AdminStats = {
     players: number;
     teams: number;
     schools: number;
-    leagues: number;
+    organizations: number;
+    conferences: number;
   };
   recent_matches: RecentMatch[];
 };
@@ -57,7 +58,8 @@ export default function AdminHome() {
     { label: "Players", key: "players" },
     { label: "Teams", key: "teams" },
     { label: "Schools", key: "schools" },
-    { label: "Leagues", key: "leagues" },
+    { label: "Orgs", key: "organizations" },
+    { label: "Conferences", key: "conferences" },
   ];
 
   return (
@@ -77,7 +79,7 @@ export default function AdminHome() {
         </div>
 
         {/* Stats tiles */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-8">
+        <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 mb-8">
           {countTiles.map((t) => (
             <div key={t.key} className="p-4 rounded-lg border border-white/10 bg-white/5">
               <div className="text-xs uppercase tracking-wider text-white/50">{t.label}</div>
@@ -157,7 +159,16 @@ export default function AdminHome() {
           >
             <div className="text-lg font-semibold">Manage Teams</div>
             <div className="text-sm text-white/60 mt-1">
-              View teams, their records, and rosters by school.
+              View teams, their records, rosters, and conference memberships.
+            </div>
+          </Link>
+          <Link
+            href="/admin/leagues"
+            className="p-6 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 transition"
+          >
+            <div className="text-lg font-semibold">Manage Leagues</div>
+            <div className="text-sm text-white/60 mt-1">
+              Organizations, seasons (Fall / Spring), and conferences / divisions.
             </div>
           </Link>
         </div>

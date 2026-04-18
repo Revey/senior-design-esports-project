@@ -7,8 +7,12 @@ import Typeahead from "../Typeahead";
 import {
   adminFetch,
   getToken,
+  type Conference,
+  type Membership,
+  type Organization,
   type Player,
   type School,
+  type Season,
   type Team,
 } from "../adminClient";
 
@@ -491,8 +495,279 @@ function TeamRow({ team }: { team: Team }) {
               />
             </div>
           )}
+
+          <MembershipsSection teamId={team._id} teamGame={team.game} />
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------- team memberships (conference + season per semester) ----------
+
+function MembershipsSection({
+  teamId,
+  teamGame,
+}: {
+  teamId: string;
+  teamGame: "Valorant" | "League of Legends";
+}) {
+  const [memberships, setMemberships] = useState<Membership[]>([]);
+  const [orgs, setOrgs] = useState<Organization[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [showAdd, setShowAdd] = useState(false);
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [m, o] = await Promise.all([
+        adminFetch<Membership[]>(`/api/admin/memberships?teamId=${teamId}`),
+        adminFetch<Organization[]>(
+          `/api/admin/orgs?game=${encodeURIComponent(teamGame)}&limit=100`,
+        ),
+      ]);
+      setMemberships(m);
+      setOrgs(o);
+    } finally {
+      setLoading(false);
+    }
+  }, [teamId, teamGame]);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  async function toggleActive(m: Membership) {
+    await adminFetch(`/api/admin/memberships/${m._id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ active: !m.active }),
+    });
+    await reload();
+  }
+
+  async function removeMembership(m: Membership) {
+    if (
+      !confirm(
+        `Remove ${m.orgAbbreviation || ""} ${m.conferenceName || ""} ${m.seasonLabel || ""} membership?`,
+      )
+    )
+      return;
+    await adminFetch(`/api/admin/memberships/${m._id}`, { method: "DELETE" });
+    await reload();
+  }
+
+  return (
+    <div className="pt-3 border-t border-white/10">
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-xs text-white/40 uppercase tracking-wide">
+          Conference / Division memberships
+        </div>
+        <button
+          onClick={() => setShowAdd(true)}
+          className="text-xs text-emerald-400 hover:text-emerald-300"
+        >
+          + Add membership
+        </button>
+      </div>
+
+      {loading && <p className="text-xs text-white/40">Loading…</p>}
+      {!loading && memberships.length === 0 && (
+        <p className="text-xs text-white/40">
+          Not enrolled in any conferences yet.
+        </p>
+      )}
+      {!loading && memberships.length > 0 && (
+        <ul className="space-y-1">
+          {memberships.map((m) => (
+            <li key={m._id} className="flex items-center gap-2 text-sm py-1">
+              <span className="font-medium">{m.orgAbbreviation}</span>
+              <span className="text-white/70">
+                {m.conferenceTier ? `${m.conferenceTier} · ` : ""}
+                {m.conferenceName}
+              </span>
+              <span className="text-xs text-white/40">{m.seasonLabel}</span>
+              <button
+                onClick={() => toggleActive(m)}
+                className={`text-xs px-2 py-0.5 rounded-full ${
+                  m.active
+                    ? "bg-emerald-500/30 text-emerald-300"
+                    : "bg-white/10 text-white/50 hover:bg-white/20"
+                }`}
+              >
+                {m.active ? "active" : "inactive"}
+              </button>
+              <button
+                onClick={() => removeMembership(m)}
+                className="ml-auto text-xs px-2 py-0.5 rounded bg-red-600/20 text-red-400 hover:bg-red-600/40"
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {showAdd && (
+        <AddMembershipForm
+          teamId={teamId}
+          orgs={orgs}
+          onClose={() => setShowAdd(false)}
+          onAdded={async () => {
+            setShowAdd(false);
+            await reload();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function AddMembershipForm({
+  teamId,
+  orgs,
+  onClose,
+  onAdded,
+}: {
+  teamId: string;
+  orgs: Organization[];
+  onClose: () => void;
+  onAdded: () => void;
+}) {
+  const [orgId, setOrgId] = useState("");
+  const [seasonId, setSeasonId] = useState("");
+  const [conferenceId, setConferenceId] = useState("");
+  const [seasons, setSeasons] = useState<Season[]>([]);
+  const [confs, setConfs] = useState<Conference[]>([]);
+  const [active, setActive] = useState(true);
+  const [err, setErr] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!orgId) {
+      setSeasons([]);
+      setConfs([]);
+      return;
+    }
+    Promise.all([
+      adminFetch<Season[]>(`/api/admin/seasons?orgId=${orgId}&limit=50`),
+      adminFetch<Conference[]>(`/api/admin/conferences?orgId=${orgId}&limit=100`),
+    ]).then(([s, c]) => {
+      setSeasons(s);
+      setConfs(c);
+      // pick active season by default
+      const activeS = s.find((x) => x.active);
+      setSeasonId(activeS?._id || "");
+      setConferenceId("");
+    });
+  }, [orgId]);
+
+  // Group conferences by tier for display
+  const confsByTier = new Map<string, Conference[]>();
+  for (const c of confs) {
+    const key = c.tier || "";
+    if (!confsByTier.has(key)) confsByTier.set(key, []);
+    confsByTier.get(key)!.push(c);
+  }
+
+  async function submit() {
+    setErr("");
+    if (!orgId || !seasonId || !conferenceId) {
+      setErr("Pick org, season, and conference.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await adminFetch(`/api/admin/memberships`, {
+        method: "POST",
+        body: JSON.stringify({ teamId, seasonId, conferenceId, active }),
+      });
+      onAdded();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Failed");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 p-3 rounded border border-white/15 bg-black/30 space-y-2">
+      <div className="grid sm:grid-cols-3 gap-2">
+        <select
+          value={orgId}
+          onChange={(e) => setOrgId(e.target.value)}
+          className="px-2 py-1.5 text-sm rounded bg-black/40 border border-white/20"
+        >
+          <option value="">Organization…</option>
+          {orgs.map((o) => (
+            <option key={o._id} value={o._id}>
+              {o.abbreviation}
+            </option>
+          ))}
+        </select>
+        <select
+          value={seasonId}
+          onChange={(e) => setSeasonId(e.target.value)}
+          disabled={!orgId}
+          className="px-2 py-1.5 text-sm rounded bg-black/40 border border-white/20 disabled:opacity-40"
+        >
+          <option value="">Season…</option>
+          {seasons.map((s) => (
+            <option key={s._id} value={s._id}>
+              {s.label}
+              {s.active ? " · active" : ""}
+            </option>
+          ))}
+        </select>
+        <select
+          value={conferenceId}
+          onChange={(e) => setConferenceId(e.target.value)}
+          disabled={!orgId}
+          className="px-2 py-1.5 text-sm rounded bg-black/40 border border-white/20 disabled:opacity-40"
+        >
+          <option value="">Conference / Division…</option>
+          {Array.from(confsByTier.entries()).map(([tier, list]) =>
+            tier ? (
+              <optgroup key={tier} label={tier}>
+                {list.map((c) => (
+                  <option key={c._id} value={c._id}>
+                    {c.name}
+                  </option>
+                ))}
+              </optgroup>
+            ) : (
+              list.map((c) => (
+                <option key={c._id} value={c._id}>
+                  {c.name}
+                </option>
+              ))
+            ),
+          )}
+        </select>
+      </div>
+      <label className="flex items-center gap-2 text-xs text-white/60">
+        <input
+          type="checkbox"
+          checked={active}
+          onChange={(e) => setActive(e.target.checked)}
+        />
+        Active this semester
+      </label>
+      {err && <p className="text-xs text-red-400">{err}</p>}
+      <div className="flex justify-end gap-2">
+        <button
+          onClick={onClose}
+          className="text-xs px-3 py-1 rounded border border-white/20 hover:bg-white/5"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={submit}
+          disabled={submitting}
+          className="text-xs px-3 py-1 rounded bg-white text-black font-semibold hover:bg-white/90 disabled:opacity-40"
+        >
+          {submitting ? "Adding…" : "Add"}
+        </button>
+      </div>
     </div>
   );
 }

@@ -7,9 +7,11 @@ import Typeahead from "../Typeahead";
 import {
   adminFetch,
   getToken,
-  type League,
+  type Conference,
+  type Organization,
   type Player,
   type School,
+  type Season,
   type Team,
 } from "../adminClient";
 
@@ -99,8 +101,14 @@ export default function MatchEntryPage() {
   const [game, setGame] = useState<Game>("Valorant");
   const [format, setFormat] = useState<Format>("BO1");
   const [date, setDate] = useState("");
-  const [leagueQ, setLeagueQ] = useState("");
-  const [league, setLeague] = useState<League | null>(null);
+
+  // League hierarchy: Org → Season → Conference
+  const [orgs, setOrgs] = useState<Organization[]>([]);
+  const [seasons, setSeasons] = useState<Season[]>([]);
+  const [conferences, setConferences] = useState<Conference[]>([]);
+  const [orgId, setOrgId] = useState("");
+  const [seasonId, setSeasonId] = useState("");
+  const [conferenceId, setConferenceId] = useState("");
 
   // Team selection
   const [school1Q, setSchool1Q] = useState("");
@@ -182,35 +190,38 @@ export default function MatchEntryPage() {
     else setReady(true);
   }, [router]);
 
-  // Clear league when game changes
+  // Load orgs whenever game changes; clear selections.
   useEffect(() => {
-    setLeague(null);
-    setLeagueQ("");
+    setOrgId("");
+    setSeasonId("");
+    setConferenceId("");
+    setSeasons([]);
+    setConferences([]);
+    adminFetch<Organization[]>(
+      `/api/admin/orgs?game=${encodeURIComponent(game)}&limit=100`,
+    ).then(setOrgs).catch(() => setOrgs([]));
   }, [game]);
 
-  const fetchLeagues = useCallback(
-    async (q: string) =>
-      adminFetch<League[]>(
-        `/api/admin/leagues?game=${encodeURIComponent(game)}&q=${encodeURIComponent(q)}&limit=10`,
-      ),
-    [game],
-  );
-
-  const createLeague = useCallback(
-    async (name: string) => {
-      // Derive abbreviation from the name (first letters of each word, up to 6 chars)
-      const abbreviation = name
-        .split(/\s+/)
-        .map((w) => w[0]?.toUpperCase() ?? "")
-        .join("")
-        .slice(0, 6) || name.slice(0, 6).toUpperCase();
-      return adminFetch<League>(`/api/admin/leagues`, {
-        method: "POST",
-        body: JSON.stringify({ name, abbreviation, game }),
-      });
-    },
-    [game],
-  );
+  // Load seasons + conferences when org changes; auto-pick the active season.
+  useEffect(() => {
+    if (!orgId) {
+      setSeasons([]);
+      setConferences([]);
+      setSeasonId("");
+      setConferenceId("");
+      return;
+    }
+    Promise.all([
+      adminFetch<Season[]>(`/api/admin/seasons?orgId=${orgId}&limit=50`),
+      adminFetch<Conference[]>(`/api/admin/conferences?orgId=${orgId}&limit=100`),
+    ]).then(([s, c]) => {
+      setSeasons(s);
+      setConferences(c);
+      const activeSeason = s.find((x) => x.active);
+      setSeasonId(activeSeason?._id || "");
+      setConferenceId("");
+    });
+  }, [orgId]);
 
   const fetchSchools = useCallback(
     async (q: string) =>
@@ -280,7 +291,9 @@ export default function MatchEntryPage() {
         team2Id: team2._id,
         format,
         date: date || undefined,
-        leagueId: league?._id || undefined,
+        orgId: orgId || undefined,
+        seasonId: seasonId || undefined,
+        conferenceId: conferenceId || undefined,
       };
       if (game === "Valorant") {
         body.maps = maps.map((m) => ({
@@ -331,7 +344,7 @@ export default function MatchEntryPage() {
         </Link>
         <h1 className="text-2xl font-bold mt-2 mb-6">Enter Match</h1>
 
-        <section className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+        <section className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-3">
           <div>
             <label className="block text-xs text-white/50 mb-1">Game</label>
             <select
@@ -342,27 +355,6 @@ export default function MatchEntryPage() {
               <option>Valorant</option>
               <option>League of Legends</option>
             </select>
-          </div>
-          <div>
-            <label className="block text-xs text-white/50 mb-1">
-              League (optional)
-            </label>
-            <Typeahead<League>
-              placeholder="e.g. CVAL, NECC…"
-              value={leagueQ}
-              onChange={setLeagueQ}
-              fetcher={fetchLeagues}
-              render={(l) => `${l.abbreviation} — ${l.name}`}
-              onSelect={(l) => {
-                setLeague(l);
-                setLeagueQ(l.abbreviation);
-              }}
-              onCreate={createLeague}
-              createLabel={(q) => `+ Create league "${q}"`}
-            />
-            {league && (
-              <p className="text-xs text-emerald-400 mt-1">{league.name}</p>
-            )}
           </div>
           <div>
             <label className="block text-xs text-white/50 mb-1">Format</label>
@@ -387,6 +379,98 @@ export default function MatchEntryPage() {
               className="w-full px-3 py-2 rounded bg-black/40 border border-white/20"
             />
           </div>
+        </section>
+
+        <section className="mb-6 p-4 rounded-lg border border-white/10 bg-white/5">
+          <div className="text-xs uppercase tracking-wider text-white/50 mb-2">
+            League (optional)
+          </div>
+          <div className="grid sm:grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs text-white/50 mb-1">
+                Organization
+              </label>
+              <select
+                value={orgId}
+                onChange={(e) => setOrgId(e.target.value)}
+                className="w-full px-3 py-2 rounded bg-black/40 border border-white/20"
+              >
+                <option value="">— none —</option>
+                {orgs.map((o) => (
+                  <option key={o._id} value={o._id}>
+                    {o.abbreviation} — {o.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-white/50 mb-1">Season</label>
+              <select
+                value={seasonId}
+                onChange={(e) => setSeasonId(e.target.value)}
+                disabled={!orgId}
+                className="w-full px-3 py-2 rounded bg-black/40 border border-white/20 disabled:opacity-40"
+              >
+                <option value="">— none —</option>
+                {seasons.map((s) => (
+                  <option key={s._id} value={s._id}>
+                    {s.label}
+                    {s.active ? " · active" : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-white/50 mb-1">
+                Conference / Division
+              </label>
+              <select
+                value={conferenceId}
+                onChange={(e) => setConferenceId(e.target.value)}
+                disabled={!orgId}
+                className="w-full px-3 py-2 rounded bg-black/40 border border-white/20 disabled:opacity-40"
+              >
+                <option value="">— none —</option>
+                {(() => {
+                  const byTier = new Map<string, Conference[]>();
+                  for (const c of conferences) {
+                    const key = c.tier || "";
+                    if (!byTier.has(key)) byTier.set(key, []);
+                    byTier.get(key)!.push(c);
+                  }
+                  return Array.from(byTier.entries()).map(([tier, list]) =>
+                    tier ? (
+                      <optgroup key={tier} label={tier}>
+                        {list.map((c) => (
+                          <option key={c._id} value={c._id}>
+                            {c.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ) : (
+                      list.map((c) => (
+                        <option key={c._id} value={c._id}>
+                          {c.name}
+                        </option>
+                      ))
+                    ),
+                  );
+                })()}
+              </select>
+            </div>
+          </div>
+          {orgId && seasons.length === 0 && (
+            <p className="text-xs text-amber-400 mt-2">
+              No seasons set up for this organization —{" "}
+              <Link
+                href="/admin/leagues"
+                className="underline hover:text-amber-300"
+              >
+                add one
+              </Link>
+              .
+            </p>
+          )}
         </section>
 
         <section className="grid md:grid-cols-2 gap-6 mb-8">

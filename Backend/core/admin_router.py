@@ -110,7 +110,35 @@ def _ensure_match_index():
         pass  # non-fatal — guard is advisory
 
 
+def _ensure_hierarchy_indexes():
+    """Indexes for orgs/seasons/conferences/memberships. Idempotent."""
+    try:
+        db = get_db()
+        if db is None:
+            return
+        db["organizations"].create_index("slug", unique=True, background=True)
+        db["seasons"].create_index(
+            [("orgId", 1), ("year", 1), ("semester", 1)],
+            unique=True, name="uniq_season", background=True,
+        )
+        db["conferences"].create_index(
+            [("orgId", 1), ("slug", 1)],
+            unique=True, name="uniq_conf_slug", background=True,
+        )
+        db["team_memberships"].create_index(
+            [("teamId", 1), ("conferenceId", 1), ("seasonId", 1)],
+            unique=True, name="uniq_membership", background=True,
+        )
+        db["team_memberships"].create_index("teamId", background=True)
+        db["team_memberships"].create_index(
+            [("conferenceId", 1), ("seasonId", 1)], background=True,
+        )
+    except Exception:
+        pass
+
+
 _ensure_match_index()
+_ensure_hierarchy_indexes()
 
 
 # ---------- models ----------
@@ -190,7 +218,12 @@ class MatchCreate(BaseModel):
     team2Id: str
     date: Optional[str] = None
     format: Literal["BO1", "BO3", "BO5"] = "BO1"
+    # Legacy single-league reference (kept for backward compatibility).
     leagueId: Optional[str] = None
+    # New hierarchy refs — any/all may be provided; frontend passes all three.
+    orgId: Optional[str] = None
+    seasonId: Optional[str] = None
+    conferenceId: Optional[str] = None
     # Valorant only
     maps: list[ValMap] = Field(default_factory=list)
     # LoL only (per-series totals with map count)
@@ -352,7 +385,11 @@ def list_players(
     teamId: Optional[str] = None,
     freeAgent: bool = False,
     limit: int = 50,
+    skip: int = 0,
+    paginated: bool = False,
 ):
+    """List players. Legacy callers get a plain list; pass `paginated=true` to get
+    `{ items, total }` so the admin table can render page numbers."""
     db = _db()
     flt: dict[str, Any] = {}
     if q:
@@ -367,8 +404,11 @@ def list_players(
             {"teamIds": {"$exists": False}},
             {"teamIds": {"$size": 0}},
         ]
-    rows = list(db["players"].find(flt).limit(limit))
-    return [_doc(r) for r in rows]
+    cursor = db["players"].find(flt).sort("displayName", 1).skip(max(0, skip)).limit(limit)
+    rows = [_doc(r) for r in cursor]
+    if paginated:
+        return {"items": rows, "total": db["players"].count_documents(flt)}
+    return rows
 
 
 @router.post("/players", dependencies=[Depends(require_admin)])
@@ -437,7 +477,7 @@ def create_match(req: MatchCreate):
 
     date = req.date or datetime.now(timezone.utc).isoformat()
 
-    # Resolve league reference if provided
+    # Resolve legacy league reference if provided (kept for back-compat).
     league_oid: Optional[ObjectId] = None
     league_name: Optional[str] = None
     if req.leagueId:
@@ -445,6 +485,42 @@ def create_match(req: MatchCreate):
         if league_doc:
             league_oid = league_doc["_id"]
             league_name = league_doc.get("abbreviation") or league_doc.get("name")
+
+    # Resolve new hierarchy refs: org / season / conference.
+    org_oid: Optional[ObjectId] = None
+    season_oid: Optional[ObjectId] = None
+    conf_oid: Optional[ObjectId] = None
+    org_abbr: Optional[str] = None
+    season_label: Optional[str] = None
+    conf_name: Optional[str] = None
+    if req.orgId:
+        org_doc = db["organizations"].find_one({"_id": _oid(req.orgId)})
+        if not org_doc:
+            raise HTTPException(404, "Organization not found")
+        org_oid = org_doc["_id"]
+        org_abbr = org_doc.get("abbreviation")
+    if req.seasonId:
+        season_doc = db["seasons"].find_one({"_id": _oid(req.seasonId)})
+        if not season_doc:
+            raise HTTPException(404, "Season not found")
+        if org_oid and season_doc["orgId"] != org_oid:
+            raise HTTPException(400, "Season does not belong to the selected organization")
+        season_oid = season_doc["_id"]
+        season_label = season_doc.get("label")
+    if req.conferenceId:
+        conf_doc = db["conferences"].find_one({"_id": _oid(req.conferenceId)})
+        if not conf_doc:
+            raise HTTPException(404, "Conference not found")
+        if org_oid and conf_doc["orgId"] != org_oid:
+            raise HTTPException(400, "Conference does not belong to the selected organization")
+        conf_oid = conf_doc["_id"]
+        conf_name = conf_doc.get("name")
+        # Fill in leagueName for display if legacy field is empty.
+        if not league_name and org_abbr:
+            tier = conf_doc.get("tier")
+            league_name = (
+                f"{org_abbr} {tier + ' ' if tier else ''}{conf_name}".strip()
+            )
 
     if req.game == "Valorant":
         if not req.maps:
@@ -466,6 +542,12 @@ def create_match(req: MatchCreate):
             "date": date,
             "leagueId": league_oid,
             "leagueName": league_name,
+            "orgId": org_oid,
+            "seasonId": season_oid,
+            "conferenceId": conf_oid,
+            "orgAbbreviation": org_abbr,
+            "seasonLabel": season_label,
+            "conferenceName": conf_name,
             "maps": [m.model_dump() for m in req.maps],
         }
         try:
@@ -522,6 +604,12 @@ def create_match(req: MatchCreate):
         "date": date,
         "leagueId": league_oid,
         "leagueName": league_name,
+        "orgId": org_oid,
+        "seasonId": season_oid,
+        "conferenceId": conf_oid,
+        "orgAbbreviation": org_abbr,
+        "seasonLabel": season_label,
+        "conferenceName": conf_name,
         "players": {
             "team1": [p.model_dump() for p in req.lolTeam1Players],
             "team2": [p.model_dump() for p in req.lolTeam2Players],
@@ -662,7 +750,444 @@ def admin_stats():
             "players": db["players"].count_documents({}),
             "teams": db["teams"].count_documents({}),
             "schools": db["schools"].count_documents({}),
-            "leagues": db["leagues"].count_documents({}),
+            "organizations": db["organizations"].count_documents({}),
+            "conferences": db["conferences"].count_documents({}),
         },
         "recent_matches": [_doc(r) for r in recent],
     }
+
+
+# ====================================================================
+# League hierarchy: organizations / seasons / conferences / memberships
+# ====================================================================
+
+GAME_LITERAL = Literal["Valorant", "League of Legends"]
+SEMESTER_LITERAL = Literal["Fall", "Spring"]
+CONF_KIND_LITERAL = Literal["regional", "division", "partner", "tier"]
+
+
+# ---------- models ----------
+
+class OrgCreate(BaseModel):
+    name: str
+    abbreviation: str
+    games: list[GAME_LITERAL] = Field(default_factory=list)
+
+
+class OrgUpdate(BaseModel):
+    name: Optional[str] = None
+    abbreviation: Optional[str] = None
+    games: Optional[list[GAME_LITERAL]] = None
+
+
+class SeasonCreate(BaseModel):
+    orgId: str
+    year: str  # "2025-2026"
+    semester: SEMESTER_LITERAL
+    active: bool = False
+
+
+class SeasonUpdate(BaseModel):
+    year: Optional[str] = None
+    semester: Optional[SEMESTER_LITERAL] = None
+    active: Optional[bool] = None
+
+
+class ConferenceCreate(BaseModel):
+    orgId: str
+    name: str
+    shortName: Optional[str] = None
+    tier: Optional[str] = None
+    kind: CONF_KIND_LITERAL = "regional"
+
+
+class ConferenceUpdate(BaseModel):
+    name: Optional[str] = None
+    shortName: Optional[str] = None
+    tier: Optional[str] = None
+    kind: Optional[CONF_KIND_LITERAL] = None
+
+
+class MembershipCreate(BaseModel):
+    teamId: str
+    conferenceId: str
+    seasonId: str
+    active: bool = True
+
+
+class MembershipUpdate(BaseModel):
+    active: bool
+
+
+# ---------- organizations ----------
+
+@router.get("/orgs", dependencies=[Depends(require_admin)])
+def list_orgs(q: str = Query("", max_length=100), game: Optional[str] = None, limit: int = 50):
+    db = _db()
+    flt: dict[str, Any] = {}
+    if q:
+        flt["$or"] = [
+            {"name": {"$regex": re.escape(q), "$options": "i"}},
+            {"abbreviation": {"$regex": re.escape(q), "$options": "i"}},
+        ]
+    if game:
+        flt["games"] = game
+    rows = list(db["organizations"].find(flt).sort("abbreviation", 1).limit(limit))
+    return [_doc(r) for r in rows]
+
+
+@router.post("/orgs", dependencies=[Depends(require_admin)])
+def create_org(req: OrgCreate):
+    db = _db()
+    name = req.name.strip()
+    abbr = req.abbreviation.strip().upper()
+    if not name or not abbr:
+        raise HTTPException(400, "name and abbreviation required")
+    slug = _slugify(abbr)
+    existing = db["organizations"].find_one({"slug": slug})
+    if existing:
+        return _doc(existing)
+    doc = {
+        "name": name,
+        "abbreviation": abbr,
+        "slug": slug,
+        "games": req.games,
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+    }
+    res = db["organizations"].insert_one(doc)
+    doc["_id"] = res.inserted_id
+    return _doc(doc)
+
+
+@router.patch("/orgs/{org_id}", dependencies=[Depends(require_admin)])
+def update_org(org_id: str, req: OrgUpdate):
+    db = _db()
+    oid = _oid(org_id)
+    update: dict[str, Any] = {}
+    if req.name is not None:
+        update["name"] = req.name.strip()
+    if req.abbreviation is not None:
+        abbr = req.abbreviation.strip().upper()
+        update["abbreviation"] = abbr
+        update["slug"] = _slugify(abbr)
+    if req.games is not None:
+        update["games"] = req.games
+    if update:
+        db["organizations"].update_one({"_id": oid}, {"$set": update})
+    return _doc(db["organizations"].find_one({"_id": oid}) or {})
+
+
+@router.delete("/orgs/{org_id}", dependencies=[Depends(require_admin)])
+def delete_org(org_id: str):
+    """Cascading delete: removes seasons, conferences, and memberships for this org."""
+    db = _db()
+    oid = _oid(org_id)
+    season_ids = [s["_id"] for s in db["seasons"].find({"orgId": oid}, {"_id": 1})]
+    conf_ids = [c["_id"] for c in db["conferences"].find({"orgId": oid}, {"_id": 1})]
+    db["team_memberships"].delete_many({
+        "$or": [
+            {"seasonId": {"$in": season_ids}},
+            {"conferenceId": {"$in": conf_ids}},
+        ]
+    })
+    db["seasons"].delete_many({"orgId": oid})
+    db["conferences"].delete_many({"orgId": oid})
+    db["organizations"].delete_one({"_id": oid})
+    return {"ok": True}
+
+
+# ---------- seasons ----------
+
+def _season_label(org_abbr: str, semester: str, year: str) -> str:
+    # year "2025-2026" — pick first year for Fall, second for Spring
+    years = year.split("-")
+    shown = years[0] if semester == "Fall" else (years[1] if len(years) > 1 else years[0])
+    return f"{org_abbr} {semester} {shown}"
+
+
+@router.get("/seasons", dependencies=[Depends(require_admin)])
+def list_seasons(orgId: Optional[str] = None, active: Optional[bool] = None, limit: int = 100):
+    db = _db()
+    flt: dict[str, Any] = {}
+    if orgId:
+        flt["orgId"] = _oid(orgId)
+    if active is not None:
+        flt["active"] = active
+    rows = list(db["seasons"].find(flt).sort([("year", -1), ("semester", 1)]).limit(limit))
+    return [_doc(r) for r in rows]
+
+
+@router.post("/seasons", dependencies=[Depends(require_admin)])
+def create_season(req: SeasonCreate):
+    db = _db()
+    org = db["organizations"].find_one({"_id": _oid(req.orgId)})
+    if not org:
+        raise HTTPException(404, "Organization not found")
+    year = req.year.strip()
+    if not re.match(r"^\d{4}-\d{4}$", year):
+        raise HTTPException(400, "year must be like 2025-2026")
+    existing = db["seasons"].find_one({
+        "orgId": org["_id"], "year": year, "semester": req.semester,
+    })
+    if existing:
+        return _doc(existing)
+    label = _season_label(org["abbreviation"], req.semester, year)
+    doc = {
+        "orgId": org["_id"],
+        "year": year,
+        "semester": req.semester,
+        "label": label,
+        "active": req.active,
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+    }
+    if req.active:
+        # only one active season per org
+        db["seasons"].update_many({"orgId": org["_id"]}, {"$set": {"active": False}})
+    try:
+        res = db["seasons"].insert_one(doc)
+    except DuplicateKeyError:
+        raise HTTPException(409, "Season already exists")
+    doc["_id"] = res.inserted_id
+    return _doc(doc)
+
+
+@router.patch("/seasons/{season_id}", dependencies=[Depends(require_admin)])
+def update_season(season_id: str, req: SeasonUpdate):
+    db = _db()
+    oid = _oid(season_id)
+    season = db["seasons"].find_one({"_id": oid})
+    if not season:
+        raise HTTPException(404, "Season not found")
+    update: dict[str, Any] = {}
+    if req.year is not None:
+        if not re.match(r"^\d{4}-\d{4}$", req.year):
+            raise HTTPException(400, "year must be like 2025-2026")
+        update["year"] = req.year
+    if req.semester is not None:
+        update["semester"] = req.semester
+    if req.active is True:
+        db["seasons"].update_many(
+            {"orgId": season["orgId"], "_id": {"$ne": oid}},
+            {"$set": {"active": False}},
+        )
+        update["active"] = True
+    elif req.active is False:
+        update["active"] = False
+    # rebuild label if year/semester changed
+    if "year" in update or "semester" in update:
+        org = db["organizations"].find_one({"_id": season["orgId"]})
+        if org:
+            update["label"] = _season_label(
+                org["abbreviation"],
+                update.get("semester", season["semester"]),
+                update.get("year", season["year"]),
+            )
+    if update:
+        db["seasons"].update_one({"_id": oid}, {"$set": update})
+    return _doc(db["seasons"].find_one({"_id": oid}) or {})
+
+
+@router.delete("/seasons/{season_id}", dependencies=[Depends(require_admin)])
+def delete_season(season_id: str):
+    db = _db()
+    oid = _oid(season_id)
+    db["team_memberships"].delete_many({"seasonId": oid})
+    db["seasons"].delete_one({"_id": oid})
+    return {"ok": True}
+
+
+# ---------- conferences ----------
+
+@router.get("/conferences", dependencies=[Depends(require_admin)])
+def list_conferences(
+    orgId: Optional[str] = None,
+    q: str = Query("", max_length=100),
+    limit: int = 100,
+):
+    db = _db()
+    flt: dict[str, Any] = {}
+    if orgId:
+        flt["orgId"] = _oid(orgId)
+    if q:
+        flt["name"] = {"$regex": re.escape(q), "$options": "i"}
+    rows = list(db["conferences"].find(flt).sort([("tier", 1), ("name", 1)]).limit(limit))
+    return [_doc(r) for r in rows]
+
+
+@router.post("/conferences", dependencies=[Depends(require_admin)])
+def create_conference(req: ConferenceCreate):
+    db = _db()
+    org = db["organizations"].find_one({"_id": _oid(req.orgId)})
+    if not org:
+        raise HTTPException(404, "Organization not found")
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(400, "name required")
+    slug = _slugify(f"{req.tier or ''} {name}".strip())
+    existing = db["conferences"].find_one({"orgId": org["_id"], "slug": slug})
+    if existing:
+        return _doc(existing)
+    doc = {
+        "orgId": org["_id"],
+        "name": name,
+        "shortName": (req.shortName or name).strip(),
+        "slug": slug,
+        "tier": (req.tier or "").strip() or None,
+        "kind": req.kind,
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+    }
+    res = db["conferences"].insert_one(doc)
+    doc["_id"] = res.inserted_id
+    return _doc(doc)
+
+
+@router.patch("/conferences/{conf_id}", dependencies=[Depends(require_admin)])
+def update_conference(conf_id: str, req: ConferenceUpdate):
+    db = _db()
+    oid = _oid(conf_id)
+    conf = db["conferences"].find_one({"_id": oid})
+    if not conf:
+        raise HTTPException(404, "Conference not found")
+    update: dict[str, Any] = {}
+    if req.name is not None:
+        update["name"] = req.name.strip()
+    if req.shortName is not None:
+        update["shortName"] = req.shortName.strip()
+    if req.tier is not None:
+        update["tier"] = req.tier.strip() or None
+    if req.kind is not None:
+        update["kind"] = req.kind
+    # rebuild slug if name or tier changed
+    if "name" in update or "tier" in update:
+        new_name = update.get("name", conf["name"])
+        new_tier = update.get("tier", conf.get("tier"))
+        update["slug"] = _slugify(f"{new_tier or ''} {new_name}".strip())
+    if update:
+        db["conferences"].update_one({"_id": oid}, {"$set": update})
+    return _doc(db["conferences"].find_one({"_id": oid}) or {})
+
+
+@router.delete("/conferences/{conf_id}", dependencies=[Depends(require_admin)])
+def delete_conference(conf_id: str):
+    db = _db()
+    oid = _oid(conf_id)
+    db["team_memberships"].delete_many({"conferenceId": oid})
+    db["conferences"].delete_one({"_id": oid})
+    return {"ok": True}
+
+
+# ---------- team memberships ----------
+
+@router.get("/memberships", dependencies=[Depends(require_admin)])
+def list_memberships(
+    teamId: Optional[str] = None,
+    conferenceId: Optional[str] = None,
+    seasonId: Optional[str] = None,
+    active: Optional[bool] = None,
+    limit: int = 200,
+):
+    """List memberships, denormalizing org/season/conference names for UI display."""
+    db = _db()
+    flt: dict[str, Any] = {}
+    if teamId:
+        flt["teamId"] = _oid(teamId)
+    if conferenceId:
+        flt["conferenceId"] = _oid(conferenceId)
+    if seasonId:
+        flt["seasonId"] = _oid(seasonId)
+    if active is not None:
+        flt["active"] = active
+    rows = list(db["team_memberships"].find(flt).limit(limit))
+
+    # Fetch referenced seasons/conferences in bulk for labels.
+    season_ids = list({r["seasonId"] for r in rows})
+    conf_ids = list({r["conferenceId"] for r in rows})
+    team_ids = list({r["teamId"] for r in rows})
+    seasons = {s["_id"]: s for s in db["seasons"].find({"_id": {"$in": season_ids}})}
+    confs = {c["_id"]: c for c in db["conferences"].find({"_id": {"$in": conf_ids}})}
+    teams = {t["_id"]: t for t in db["teams"].find({"_id": {"$in": team_ids}})}
+    org_ids = list({c.get("orgId") for c in confs.values() if c.get("orgId")})
+    orgs = {o["_id"]: o for o in db["organizations"].find({"_id": {"$in": org_ids}})}
+
+    out = []
+    for r in rows:
+        d = _doc(r)
+        s = seasons.get(r["seasonId"])
+        c = confs.get(r["conferenceId"])
+        t = teams.get(r["teamId"])
+        org = orgs.get(c.get("orgId")) if c else None
+        d["seasonLabel"] = s.get("label") if s else None
+        d["conferenceName"] = c.get("name") if c else None
+        d["conferenceTier"] = c.get("tier") if c else None
+        d["orgAbbreviation"] = org.get("abbreviation") if org else None
+        d["teamName"] = t.get("teamName") if t else None
+        out.append(d)
+    return out
+
+
+@router.post("/memberships", dependencies=[Depends(require_admin)])
+def create_membership(req: MembershipCreate):
+    db = _db()
+    team = db["teams"].find_one({"_id": _oid(req.teamId)})
+    conf = db["conferences"].find_one({"_id": _oid(req.conferenceId)})
+    season = db["seasons"].find_one({"_id": _oid(req.seasonId)})
+    if not team or not conf or not season:
+        raise HTTPException(404, "team / conference / season not found")
+    if conf["orgId"] != season["orgId"]:
+        raise HTTPException(400, "conference and season must belong to the same org")
+    doc = {
+        "teamId": team["_id"],
+        "conferenceId": conf["_id"],
+        "seasonId": season["_id"],
+        "active": req.active,
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        res = db["team_memberships"].insert_one(doc)
+    except DuplicateKeyError:
+        existing = db["team_memberships"].find_one({
+            "teamId": team["_id"],
+            "conferenceId": conf["_id"],
+            "seasonId": season["_id"],
+        })
+        return _doc(existing or {})
+    doc["_id"] = res.inserted_id
+    return _doc(doc)
+
+
+@router.patch("/memberships/{membership_id}", dependencies=[Depends(require_admin)])
+def update_membership(membership_id: str, req: MembershipUpdate):
+    db = _db()
+    oid = _oid(membership_id)
+    db["team_memberships"].update_one({"_id": oid}, {"$set": {"active": req.active}})
+    return _doc(db["team_memberships"].find_one({"_id": oid}) or {})
+
+
+@router.delete("/memberships/{membership_id}", dependencies=[Depends(require_admin)])
+def delete_membership(membership_id: str):
+    db = _db()
+    db["team_memberships"].delete_one({"_id": _oid(membership_id)})
+    return {"ok": True}
+
+
+# ---------- hierarchy tree (for /admin/leagues UI) ----------
+
+@router.get("/leagues-tree", dependencies=[Depends(require_admin)])
+def leagues_tree():
+    """Return orgs with their seasons and conferences nested for the management UI."""
+    db = _db()
+    orgs = list(db["organizations"].find({}).sort("abbreviation", 1))
+    out = []
+    for o in orgs:
+        seasons = list(
+            db["seasons"].find({"orgId": o["_id"]}).sort([("year", -1), ("semester", 1)])
+        )
+        confs = list(
+            db["conferences"].find({"orgId": o["_id"]}).sort([("tier", 1), ("name", 1)])
+        )
+        out.append({
+            **_doc(o),
+            "seasons": [_doc(s) for s in seasons],
+            "conferences": [_doc(c) for c in confs],
+        })
+    return out

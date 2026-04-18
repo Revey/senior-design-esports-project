@@ -11,10 +11,14 @@ import {
   type Team,
 } from "../adminClient";
 
+const PAGE_SIZE = 10;
+
 export default function PlayersAdmin() {
   const router = useRouter();
   const [ready, setReady] = useState(false);
   const [players, setPlayers] = useState<Player[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [query, setQuery] = useState("");
   const [newName, setNewName] = useState("");
   const [newRiot, setNewRiot] = useState("");
@@ -25,16 +29,30 @@ export default function PlayersAdmin() {
     else setReady(true);
   }, [router]);
 
-  const reload = useCallback(async () => {
-    const data = await adminFetch<Player[]>(
-      `/api/admin/players?q=${encodeURIComponent(query)}&limit=100`,
-    );
-    setPlayers(data);
+  // Reset to page 1 on new search.
+  useEffect(() => {
+    setPage(1);
   }, [query]);
+
+  const reload = useCallback(async () => {
+    const params = new URLSearchParams({
+      q: query,
+      limit: String(PAGE_SIZE),
+      skip: String((page - 1) * PAGE_SIZE),
+      paginated: "true",
+    });
+    const data = await adminFetch<{ items: Player[]; total: number }>(
+      `/api/admin/players?${params}`,
+    );
+    setPlayers(data.items);
+    setTotal(data.total);
+  }, [query, page]);
 
   useEffect(() => {
     if (ready) reload();
   }, [ready, reload]);
+
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   async function createPlayer() {
     if (!newName.trim()) return;
@@ -119,8 +137,107 @@ export default function PlayersAdmin() {
             </p>
           )}
         </div>
+
+        {total > 0 && (
+          <Pagination
+            page={page}
+            pageCount={pageCount}
+            total={total}
+            pageSize={PAGE_SIZE}
+            onPageChange={setPage}
+          />
+        )}
       </div>
     </main>
+  );
+}
+
+function Pagination({
+  page,
+  pageCount,
+  total,
+  pageSize,
+  onPageChange,
+}: {
+  page: number;
+  pageCount: number;
+  total: number;
+  pageSize: number;
+  onPageChange: (p: number) => void;
+}) {
+  const windowSize = 5;
+  const start = Math.max(1, Math.min(page - 2, pageCount - windowSize + 1));
+  const end = Math.min(pageCount, start + windowSize - 1);
+  const pages: number[] = [];
+  for (let i = start; i <= end; i++) pages.push(i);
+
+  const shownFrom = (page - 1) * pageSize + 1;
+  const shownTo = Math.min(page * pageSize, total);
+
+  return (
+    <div className="mt-6 flex items-center justify-between text-sm text-white/60">
+      <span>
+        Showing {shownFrom}–{shownTo} of {total}
+      </span>
+      <div className="flex items-center gap-1">
+        <button
+          disabled={page === 1}
+          onClick={() => onPageChange(page - 1)}
+          className="px-2 py-1 rounded border border-white/15 hover:bg-white/5 disabled:opacity-30 disabled:cursor-not-allowed"
+        >
+          ‹
+        </button>
+        {start > 1 && (
+          <>
+            <PageBtn n={1} active={page === 1} onClick={onPageChange} />
+            {start > 2 && <span className="px-1 text-white/30">…</span>}
+          </>
+        )}
+        {pages.map((n) => (
+          <PageBtn key={n} n={n} active={n === page} onClick={onPageChange} />
+        ))}
+        {end < pageCount && (
+          <>
+            {end < pageCount - 1 && <span className="px-1 text-white/30">…</span>}
+            <PageBtn
+              n={pageCount}
+              active={page === pageCount}
+              onClick={onPageChange}
+            />
+          </>
+        )}
+        <button
+          disabled={page === pageCount}
+          onClick={() => onPageChange(page + 1)}
+          className="px-2 py-1 rounded border border-white/15 hover:bg-white/5 disabled:opacity-30 disabled:cursor-not-allowed"
+        >
+          ›
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PageBtn({
+  n,
+  active,
+  onClick,
+}: {
+  n: number;
+  active: boolean;
+  onClick: (p: number) => void;
+}) {
+  return (
+    <button
+      onClick={() => onClick(n)}
+      className={`min-w-[32px] px-2 py-1 rounded border text-sm ${
+        active
+          ? "bg-white text-black border-white font-semibold"
+          : "border-white/15 hover:bg-white/5"
+      }`}
+    >
+      {n}
+    </button>
   );
 }
 

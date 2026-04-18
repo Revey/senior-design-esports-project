@@ -46,14 +46,6 @@ export async function adminFetch<T = unknown>(
 }
 
 export type School = { _id: string; name: string; slug: string };
-export type League = {
-  _id: string;
-  name: string;
-  abbreviation: string;
-  game: "Valorant" | "League of Legends";
-  slug: string;
-  season?: string;
-};
 export type Team = {
   _id: string;
   teamName: string;
@@ -72,4 +64,53 @@ export type Player = {
   role?: string | null;
   teamIds?: string[];
   active?: boolean;
+};
+
+export type Game = "Valorant" | "League of Legends";
+export type Semester = "Fall" | "Spring";
+export type ConfKind = "regional" | "division" | "partner" | "tier";
+
+export type Organization = {
+  _id: string;
+  name: string;
+  abbreviation: string;
+  slug: string;
+  games: Game[];
+};
+
+export type Season = {
+  _id: string;
+  orgId: string;
+  year: string; // "2025-2026"
+  semester: Semester;
+  label: string; // "CVAL Fall 2025"
+  active: boolean;
+};
+
+export type Conference = {
+  _id: string;
+  orgId: string;
+  name: string;
+  shortName: string;
+  slug: string;
+  tier?: string | null;
+  kind: ConfKind;
+};
+
+export type LeagueTreeOrg = Organization & {
+  seasons: Season[];
+  conferences: Conference[];
+};
+
+export type Membership = {
+  _id: string;
+  teamId: string;
+  conferenceId: string;
+  seasonId: string;
+  active: boolean;
+  seasonLabel?: string;
+  conferenceName?: string;
+  conferenceTier?: string | null;
+  orgAbbreviation?: string;
+  teamName?: string;
 };
