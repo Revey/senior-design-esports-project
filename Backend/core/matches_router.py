@@ -61,6 +61,47 @@ def list_matches(
     return {"items": items, "total": total, "page": page, "limit": limit}
 
 
+def _enrich_players(db, doc: dict) -> dict:
+    """Replace playerId strings in maps/players with {id, name} objects."""
+    player_ids: set[ObjectId] = set()
+
+    for m in doc.get("maps", []):
+        for side in ("team1Players", "team2Players"):
+            for p in m.get(side, []):
+                try:
+                    player_ids.add(ObjectId(p["playerId"]))
+                except Exception:
+                    pass
+
+    players_blob = doc.get("players", {})
+    for side in ("team1", "team2"):
+        for p in players_blob.get(side, []):
+            try:
+                player_ids.add(ObjectId(p["playerId"]))
+            except Exception:
+                pass
+
+    if not player_ids:
+        return doc
+
+    name_map: dict[str, str] = {}
+    for row in db["players"].find({"_id": {"$in": list(player_ids)}}):
+        name_map[str(row["_id"])] = row.get("displayName") or row.get("riotId") or str(row["_id"])
+
+    for m in doc.get("maps", []):
+        for side in ("team1Players", "team2Players"):
+            for p in m.get(side, []):
+                pid = str(p.get("playerId", ""))
+                p["playerName"] = name_map.get(pid, pid)
+
+    for side in ("team1", "team2"):
+        for p in players_blob.get(side, []):
+            pid = str(p.get("playerId", ""))
+            p["playerName"] = name_map.get(pid, pid)
+
+    return doc
+
+
 @router.get("/{match_id}")
 def get_match(match_id: str):
     db = get_db()
@@ -73,4 +114,6 @@ def get_match(match_id: str):
     doc = db["matches"].find_one({"_id": oid})
     if not doc:
         raise HTTPException(404, "Match not found")
-    return _clean(doc)
+    doc = _clean(doc)
+    doc = _enrich_players(db, doc)
+    return doc

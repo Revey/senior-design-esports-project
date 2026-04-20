@@ -8,6 +8,25 @@ from core.db import get_db
 router = APIRouter()
 
 
+def _team_to_ranked(doc: dict[str, Any]) -> dict[str, Any]:
+    wins = int(doc.get("wins") or 0)
+    losses = int(doc.get("losses") or 0)
+    total = wins + losses
+    win_rate = round((wins / total) * 100, 1) if total > 0 else 0.0
+    rating = 1000 + wins * 100 - losses * 50
+    return {
+        "slug": doc.get("slug", ""),
+        "name": doc.get("teamName", ""),
+        "school": doc.get("school", ""),
+        "game": doc.get("game", ""),
+        "record": {"wins": wins, "losses": losses},
+        "win_rate": win_rate,
+        "rating": rating,
+        "region": "",
+        "league_slug": "",
+    }
+
+
 @router.get("/")
 def list_teams(
     game: Optional[str] = Query(None),
@@ -21,14 +40,27 @@ def list_teams(
     filt: dict[str, Any] = {}
     if game:
         filt["game"] = game
+
+    admin_teams = list(db["teams"].find(filt).limit(limit))
+    if admin_teams:
+        docs = [_team_to_ranked(t) for t in admin_teams]
+        reverse = order == "desc"
+        if sort == "win_rate":
+            docs.sort(key=lambda t: t["win_rate"], reverse=reverse)
+        elif sort == "record.wins":
+            docs.sort(key=lambda t: t["record"]["wins"], reverse=reverse)
+        else:
+            docs.sort(key=lambda t: t["rating"], reverse=reverse)
+        return docs
+
+    # Fallback to seeded ranked_teams if no admin teams exist yet.
     sort_dir = -1 if order == "desc" else 1
-    docs = list(
+    return list(
         db["ranked_teams"]
         .find(filt, {"_id": 0})
         .sort(sort, sort_dir)
         .limit(limit)
     )
-    return docs
 
 
 def _clean(row: dict[str, Any]) -> dict[str, Any]:

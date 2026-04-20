@@ -2,6 +2,7 @@
 
 import { useEffect, useState, Suspense } from "react";
 import type { CSSProperties } from "react";
+import Link from "next/link";
 
 type Match = {
   _id: string;
@@ -129,37 +130,39 @@ function MatchesContent() {
               const isVal = m.game === "Valorant";
               const t1Won = m.winnerTeamId === m.team1Id;
               return (
-                <div key={m._id} className="data-row row-enter" style={s.row}>
-                  <div style={{ ...s.dateCol, opacity: 0.7 }}>{formatDate(m.date)}</div>
-                  <div style={s.gameCol}>
-                    <span style={{
-                      padding: "0.2rem 0.5rem",
-                      borderRadius: 5,
-                      fontSize: "0.75rem",
-                      fontWeight: 600,
-                      background: isVal ? "rgba(255,70,85,0.15)" : "rgba(200,155,60,0.15)",
-                      color: isVal ? "#ff4655" : "#c89b3c",
-                    }}>
-                      {isVal ? "VAL" : "LoL"}
-                    </span>
+                <Link key={m._id} href={`/matches/${m._id}`} style={{ textDecoration: "none", color: "inherit" }}>
+                  <div className="data-row row-enter" style={{ ...s.row, cursor: "pointer" }}>
+                    <div style={{ ...s.dateCol, opacity: 0.7 }}>{formatDate(m.date)}</div>
+                    <div style={s.gameCol}>
+                      <span style={{
+                        padding: "0.2rem 0.5rem",
+                        borderRadius: 5,
+                        fontSize: "0.75rem",
+                        fontWeight: 600,
+                        background: isVal ? "rgba(255,70,85,0.15)" : "rgba(200,155,60,0.15)",
+                        color: isVal ? "#ff4655" : "#c89b3c",
+                      }}>
+                        {isVal ? "VAL" : "LoL"}
+                      </span>
+                    </div>
+                    <div style={s.matchupCol}>
+                      <span style={{ fontWeight: t1Won ? 700 : 400, color: t1Won ? "#22c55e" : "white" }}>
+                        {m.team1Name}
+                      </span>
+                      <span style={{ opacity: 0.35, margin: "0 0.4rem" }}>vs</span>
+                      <span style={{ fontWeight: !t1Won ? 700 : 400, color: !t1Won ? "#22c55e" : "white" }}>
+                        {m.team2Name}
+                      </span>
+                    </div>
+                    <div style={{ ...s.formatCol, opacity: 0.6 }}>{m.format ?? "—"}</div>
+                    <div style={s.scoreCol} className="tabular-nums">
+                      {m.team1Score ?? 0}<span style={{ opacity: 0.3 }}>–</span>{m.team2Score ?? 0}
+                    </div>
+                    <div style={{ ...s.leagueCol, opacity: 0.55, fontSize: "0.8rem" }}>
+                      {m.leagueName ?? "—"}
+                    </div>
                   </div>
-                  <div style={s.matchupCol}>
-                    <span style={{ fontWeight: t1Won ? 700 : 400, color: t1Won ? "#22c55e" : "white" }}>
-                      {m.team1Name}
-                    </span>
-                    <span style={{ opacity: 0.35, margin: "0 0.4rem" }}>vs</span>
-                    <span style={{ fontWeight: !t1Won ? 700 : 400, color: !t1Won ? "#22c55e" : "white" }}>
-                      {m.team2Name}
-                    </span>
-                  </div>
-                  <div style={{ ...s.formatCol, opacity: 0.6 }}>{m.format ?? "—"}</div>
-                  <div style={s.scoreCol} className="tabular-nums">
-                    {m.team1Score ?? 0}<span style={{ opacity: 0.3 }}>–</span>{m.team2Score ?? 0}
-                  </div>
-                  <div style={{ ...s.leagueCol, opacity: 0.55, fontSize: "0.8rem" }}>
-                    {m.leagueName ?? "—"}
-                  </div>
-                </div>
+                </Link>
               );
             })}
           </section>
