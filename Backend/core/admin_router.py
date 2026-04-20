@@ -110,6 +110,26 @@ def _ensure_match_index():
         pass  # non-fatal — guard is advisory
 
 
+def _fix_matchid_index():
+    """
+    The matchId field is only present on Riot-ingested matches, not admin matches.
+    A non-sparse unique index on matchId causes DuplicateKeyError for every second
+    admin match (all indexed as {matchId: null}).  Drop and recreate as sparse so
+    only documents that actually have a matchId are included in the uniqueness check.
+    """
+    try:
+        db = get_db()
+        if db is None:
+            return
+        try:
+            db["matches"].drop_index("matchId_1")
+        except Exception:
+            pass
+        db["matches"].create_index("matchId", unique=True, sparse=True, name="matchId_1")
+    except Exception:
+        pass
+
+
 def _ensure_hierarchy_indexes():
     """Indexes for orgs/seasons/conferences/memberships. Idempotent."""
     try:
@@ -139,6 +159,7 @@ def _ensure_hierarchy_indexes():
 
 _ensure_match_index()
 _ensure_hierarchy_indexes()
+_fix_matchid_index()
 
 
 # ---------- models ----------
@@ -555,11 +576,11 @@ def create_match(req: MatchCreate):
             {"team1Id": t2["_id"], "team2Id": t1["_id"], "date": date, "game": "Valorant"},
         ]})
         if _dup:
-            raise HTTPException(409, f"[pre-check] Duplicate match found: {str(_dup.get('_id'))} date={date}")
+            raise HTTPException(409, "A match between these teams on this date already exists")
         try:
             res = db["matches"].insert_one(match_doc)
-        except DuplicateKeyError as e:
-            raise HTTPException(409, f"[index] DuplicateKeyError: {str(e)}")
+        except DuplicateKeyError:
+            raise HTTPException(409, "A match between these teams on this date already exists")
 
         # per-player stats rows
         pms_rows = []
@@ -626,11 +647,11 @@ def create_match(req: MatchCreate):
         {"team1Id": t2["_id"], "team2Id": t1["_id"], "date": date, "game": "League of Legends"},
     ]})
     if _dup:
-        raise HTTPException(409, f"[pre-check] Duplicate match found: {str(_dup.get('_id'))} date={date}")
+        raise HTTPException(409, "A match between these teams on this date already exists")
     try:
         res = db["matches"].insert_one(match_doc)
-    except DuplicateKeyError as e:
-        raise HTTPException(409, f"[index] DuplicateKeyError: {str(e)}")
+    except DuplicateKeyError:
+        raise HTTPException(409, "A match between these teams on this date already exists")
 
     pms_rows = []
     for side, players in (("team1", req.lolTeam1Players), ("team2", req.lolTeam2Players)):
