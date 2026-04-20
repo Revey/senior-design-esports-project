@@ -550,15 +550,16 @@ def create_match(req: MatchCreate):
             "conferenceName": conf_name,
             "maps": [m.model_dump() for m in req.maps],
         }
-        if db["matches"].find_one({"$or": [
+        _dup = db["matches"].find_one({"$or": [
             {"team1Id": t1["_id"], "team2Id": t2["_id"], "date": date, "game": "Valorant"},
             {"team1Id": t2["_id"], "team2Id": t1["_id"], "date": date, "game": "Valorant"},
-        ]}):
-            raise HTTPException(409, "A match between these teams on this date already exists")
+        ]})
+        if _dup:
+            raise HTTPException(409, f"[pre-check] Duplicate match found: {str(_dup.get('_id'))} date={date}")
         try:
             res = db["matches"].insert_one(match_doc)
-        except DuplicateKeyError:
-            raise HTTPException(409, "A match between these teams on this date already exists")
+        except DuplicateKeyError as e:
+            raise HTTPException(409, f"[index] DuplicateKeyError: {str(e)}")
 
         # per-player stats rows
         pms_rows = []
@@ -620,15 +621,16 @@ def create_match(req: MatchCreate):
             "team2": [p.model_dump() for p in req.lolTeam2Players],
         },
     }
-    if db["matches"].find_one({"$or": [
+    _dup = db["matches"].find_one({"$or": [
         {"team1Id": t1["_id"], "team2Id": t2["_id"], "date": date, "game": "League of Legends"},
         {"team1Id": t2["_id"], "team2Id": t1["_id"], "date": date, "game": "League of Legends"},
-    ]}):
-        raise HTTPException(409, "A match between these teams on this date already exists")
+    ]})
+    if _dup:
+        raise HTTPException(409, f"[pre-check] Duplicate match found: {str(_dup.get('_id'))} date={date}")
     try:
         res = db["matches"].insert_one(match_doc)
-    except DuplicateKeyError:
-        raise HTTPException(409, "A match between these teams on this date already exists")
+    except DuplicateKeyError as e:
+        raise HTTPException(409, f"[index] DuplicateKeyError: {str(e)}")
 
     pms_rows = []
     for side, players in (("team1", req.lolTeam1Players), ("team2", req.lolTeam2Players)):
