@@ -550,6 +550,11 @@ def create_match(req: MatchCreate):
             "conferenceName": conf_name,
             "maps": [m.model_dump() for m in req.maps],
         }
+        if db["matches"].find_one({"$or": [
+            {"team1Id": t1["_id"], "team2Id": t2["_id"], "date": date, "game": "Valorant"},
+            {"team1Id": t2["_id"], "team2Id": t1["_id"], "date": date, "game": "Valorant"},
+        ]}):
+            raise HTTPException(409, "A match between these teams on this date already exists")
         try:
             res = db["matches"].insert_one(match_doc)
         except DuplicateKeyError:
@@ -615,6 +620,11 @@ def create_match(req: MatchCreate):
             "team2": [p.model_dump() for p in req.lolTeam2Players],
         },
     }
+    if db["matches"].find_one({"$or": [
+        {"team1Id": t1["_id"], "team2Id": t2["_id"], "date": date, "game": "League of Legends"},
+        {"team1Id": t2["_id"], "team2Id": t1["_id"], "date": date, "game": "League of Legends"},
+    ]}):
+        raise HTTPException(409, "A match between these teams on this date already exists")
     try:
         res = db["matches"].insert_one(match_doc)
     except DuplicateKeyError:

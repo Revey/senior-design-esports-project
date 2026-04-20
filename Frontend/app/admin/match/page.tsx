@@ -327,6 +327,12 @@ export default function MatchEntryPage() {
       setLolT2Score(0);
       setLolT1Players(Array.from({ length: 5 }, BLANK_LOL_PLAYER));
       setLolT2Players(Array.from({ length: 5 }, BLANK_LOL_PLAYER));
+      setSchool1Q(""); setSchool1(null);
+      setTeam1Q(""); setTeam1(null);
+      setSchool2Q(""); setSchool2(null);
+      setTeam2Q(""); setTeam2(null);
+      setDate("");
+      setOrgId(""); setSeasonId(""); setConferenceId("");
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Failed to save");
     } finally {
