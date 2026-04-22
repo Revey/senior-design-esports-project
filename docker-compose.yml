@@ -1,0 +1,81 @@
+# Local dev stack for the postgres-migration branch.
+#
+#   docker compose up            # build + start db + backend
+#   docker compose up -d db      # start just postgres in the background
+#   docker compose logs -f backend
+#   docker compose down          # stop (keeps data volume)
+#   docker compose down -v       # stop AND wipe the postgres volume
+#
+# Frontend is intentionally not containerized — run `npm run dev` in Frontend/
+# and it will hit the backend at http://localhost:8000.
+
+services:
+  db:
+    image: postgres:18  # Debian-based to match DO Managed Postgres (glibc collation parity)
+    container_name: esports-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: esports
+      POSTGRES_PASSWORD: esports
+      POSTGRES_DB: esports
+    ports:
+      - "5432:5432"
+    volumes:
+      # PG18+ expects the mount at the parent dir so it can manage per-major
+      # subdirectories (see github.com/docker-library/postgres/pull/1259).
+      - pgdata:/var/lib/postgresql
+      # Auto-applied the first time the data volume is created. If you change
+      # schema.sql and need it re-applied, run `docker compose down -v` first.
+      - ./Backend/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U esports -d esports"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./Backend
+      dockerfile: Dockerfile
+    container_name: esports-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://esports:esports@db:5432/esports
+      DB_POOL_MIN: "1"
+      DB_POOL_MAX: "10"
+      HOST: 0.0.0.0
+      PORT: "8000"
+      DEBUG: "true"
+      FRONTEND_ORIGIN: http://localhost:3000
+      ALLOWED_ORIGINS: http://localhost:3000,http://localhost:3001
+      RATE_LIMIT_DEFAULT: 60/minute
+      # Put real secrets / Riot keys in .env (gitignored) — compose picks them up.
+    env_file:
+      - path: ./Backend/.env
+        required: false
+    ports:
+      - "8000:8000"
+    volumes:
+      # Bind-mount the source for uvicorn --reload. The anonymous volume on
+      # __pycache__ keeps host/container .pyc files from stepping on each other.
+      - ./Backend:/app
+      - /app/__pycache__
+
+  frontend:
+    build:
+      context: ./Frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_BACKEND_URL: http://localhost:8000
+    container_name: esports-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+
+volumes:
+  pgdata:

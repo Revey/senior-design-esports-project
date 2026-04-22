@@ -1,0 +1,48 @@
+name: campus-rankers
+region: nyc
+
+services:
+  - name: backend
+    source_dir: Backend
+    dockerfile_path: Backend/Dockerfile
+    http_port: 8000
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    routes:
+      - path: /api
+    envs:
+      - key: HOST
+        value: "0.0.0.0"
+      - key: PORT
+        value: "8000"
+      - key: DB_POOL_MIN
+        value: "1"
+      - key: DB_POOL_MAX
+        value: "10"
+      - key: DEBUG
+        value: "false"
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        type: SECRET
+      - key: RIOT_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: FRONTEND_ORIGIN
+        scope: RUN_AND_BUILD_TIME
+        value: ${frontend.PUBLIC_URL}
+      - key: ALLOWED_ORIGINS
+        scope: RUN_AND_BUILD_TIME
+        value: ${frontend.PUBLIC_URL}
+
+  - name: frontend
+    source_dir: Frontend
+    dockerfile_path: Frontend/Dockerfile
+    http_port: 3000
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    routes:
+      - path: /
+    envs:
+      - key: NEXT_PUBLIC_BACKEND_URL
+        scope: BUILD_TIME
+        value: ${backend.PUBLIC_URL}
