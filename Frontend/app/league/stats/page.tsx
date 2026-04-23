@@ -4,7 +4,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { CSSProperties } from "react";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "");
+const API_BASE_URL = (process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000").replace(/\/$/, "");
 
 type RankInfo = {
   tier_text: string | null;
@@ -238,10 +238,6 @@ function LeagueStatsInner() {
       try {
         setLoading(true);
         setError("");
-
-        if (!API_BASE_URL) {
-          throw new Error("Missing NEXT_PUBLIC_API_BASE_URL environment variable.");
-        }
 
         const res = await fetch(
           `${API_BASE_URL}/api/league/team-players?team=${encodeURIComponent(team)}`,
