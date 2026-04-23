@@ -4,26 +4,15 @@ import { useEffect, useState, Suspense } from "react";
 import type { CSSProperties } from "react";
 import Link from "next/link";
 
-type PlayerStats = {
-  kd?: number;
-  acs?: number;
-  adr?: number;
-  hs_percent?: number;
-  kda?: number;
-  kills_per_game?: number;
-  deaths_per_game?: number;
-  assists_per_game?: number;
-};
-
 type Player = {
   slug: string;
-  name: string;
+  displayName: string;
+  riotId: string;
+  role: string | null;
+  game: string;
   team_name: string;
   team_slug: string;
-  game: string;
-  role: string;
-  stats: PlayerStats;
-  rating: number;
+  active: boolean;
 };
 
 type GameFilter = "All" | "Valorant" | "League of Legends";
@@ -39,28 +28,21 @@ const LOL_ROLES = ["All", "Top", "Jungle", "Mid", "ADC", "Support"];
 
 const API = (process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000").replace(/\/$/, "");
 
-function ratingColor(r: number): string {
-  if (r >= 1700) return "#22c55e";
-  if (r >= 1500) return "#eab308";
-  return "#f97316";
-}
-
 function PlayersContent() {
   const [players, setPlayers] = useState<Player[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [game, setGame] = useState<GameFilter>("All");
   const [role, setRole] = useState("All");
-  const [sortField, setSortField] = useState("rating");
-  const [sortOrder, setSortOrder] = useState<"desc" | "asc">("desc");
   const [search, setSearch] = useState("");
 
   const roles = game === "League of Legends" ? LOL_ROLES : game === "Valorant" ? VAL_ROLES : [];
+  const activeColor = GAME_TABS.find((t) => t.label === game)!.color;
 
   useEffect(() => {
     setError(null);
     setLoaded(false);
-    const params = new URLSearchParams({ sort: sortField, order: sortOrder, limit: "100" });
+    const params = new URLSearchParams({ limit: "200" });
     if (game !== "All") params.set("game", game);
     if (role !== "All") params.set("role", role);
 
@@ -74,175 +56,154 @@ function PlayersContent() {
         setLoaded(true);
       })
       .catch((e: Error) => setError(e.message));
-  }, [game, role, sortField, sortOrder]);
+  }, [game, role]);
 
-  // Reset role when game changes
   useEffect(() => { setRole("All"); }, [game]);
 
-  function toggleSort(field: string) {
-    if (sortField === field) {
-      setSortOrder((o) => (o === "desc" ? "asc" : "desc"));
-    } else {
-      setSortField(field);
-      setSortOrder("desc");
-    }
-  }
-
-  function sortInd(field: string) {
-    if (sortField !== field) return "";
-    return sortOrder === "desc" ? " \u25BC" : " \u25B2";
-  }
-
-  const activeColor = GAME_TABS.find((t) => t.label === game)!.color;
-  const isVal = game === "Valorant" || game === "All";
   const needle = search.toLowerCase();
   const filteredPlayers = needle
-    ? players.filter((p) => p.name.toLowerCase().includes(needle) || p.team_name.toLowerCase().includes(needle))
+    ? players.filter(
+        (p) =>
+          p.displayName.toLowerCase().includes(needle) ||
+          (p.riotId ?? "").toLowerCase().includes(needle) ||
+          (p.team_name ?? "").toLowerCase().includes(needle)
+      )
     : players;
 
   return (
     <main style={s.container}>
       <div className="page-content">
-      <h1 style={s.title}>Player rankings</h1>
-      <p style={s.subtitle}>Top collegiate esports players</p>
+        <h1 style={s.title}>Player rankings</h1>
+        <p style={s.subtitle}>Top collegiate esports players</p>
 
-      {/* Game tabs */}
-      <div style={s.tabRow}>
-        {GAME_TABS.map((tab) => {
-          const active = game === tab.label;
-          return (
-            <button
-              key={tab.label}
-              onClick={() => setGame(tab.label)}
-              style={{
-                ...s.tabBtn,
-                background: active ? tab.color : "rgba(255,255,255,0.07)",
-                color: active ? "white" : "rgba(255,255,255,0.5)",
-                borderColor: active ? tab.color : "rgba(255,255,255,0.12)",
-                boxShadow: active ? `0 0 14px ${tab.color}66` : "none",
-              }}
-            >
-              {tab.label}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Role filter */}
-      {roles.length > 0 && (
-        <div style={{ ...s.tabRow, gap: "0.4rem" }}>
-          {roles.map((r) => (
-            <button
-              key={r}
-              onClick={() => setRole(r)}
-              style={{
-                ...s.roleBtn,
-                background: role === r ? "rgba(255,255,255,0.15)" : "transparent",
-                color: role === r ? "white" : "rgba(255,255,255,0.45)",
-                borderColor: role === r ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.1)",
-              }}
-            >
-              {r}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Search */}
-      <input
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder="Search player or team…"
-        style={s.searchInput}
-      />
-
-      {error && <p style={{ color: "#f87171" }}>{error}</p>}
-
-      {/* Player table */}
-      <section style={{ ...s.card, borderColor: `${activeColor}55` }}>
-        <div style={{ ...s.row, ...s.header }}>
-          <div style={s.rankCol}>#</div>
-          <div style={s.nameCol}>Player</div>
-          <div style={s.teamCol}>Team</div>
-          <div style={s.roleCol}>Role</div>
-          <div style={{ ...s.stat, cursor: "pointer" }} onClick={() => toggleSort("stats.kd")}>
-            {isVal ? `K/D${sortInd("stats.kd")}` : `KDA${sortInd("stats.kd")}`}
-          </div>
-          <div style={{ ...s.stat, cursor: "pointer" }} onClick={() => toggleSort("stats.acs")}>
-            {isVal ? `ACS${sortInd("stats.acs")}` : `K/G${sortInd("stats.acs")}`}
-          </div>
-          <div style={{ ...s.stat, cursor: "pointer" }} onClick={() => toggleSort("stats.adr")}>
-            {isVal ? `ADR${sortInd("stats.adr")}` : `D/G${sortInd("stats.adr")}`}
-          </div>
-          <div style={s.stat}>{isVal ? "HS%" : "A/G"}</div>
-          <div style={{ ...s.ratingCol, cursor: "pointer" }} onClick={() => toggleSort("rating")}>
-            Rating{sortInd("rating")}
-          </div>
+        {/* Game tabs */}
+        <div style={s.tabRow}>
+          {GAME_TABS.map((tab) => {
+            const active = game === tab.label;
+            return (
+              <button
+                key={tab.label}
+                onClick={() => setGame(tab.label)}
+                style={{
+                  ...s.tabBtn,
+                  background: active ? tab.color : "rgba(255,255,255,0.07)",
+                  color: active ? "white" : "rgba(255,255,255,0.5)",
+                  borderColor: active ? tab.color : "rgba(255,255,255,0.12)",
+                  boxShadow: active ? `0 0 14px ${tab.color}66` : "none",
+                }}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
         </div>
 
-        {!loaded && !error && (
-          <div style={{ padding: "1rem", display: "flex", flexDirection: "column", gap: "0.6rem" }}>
-            {[...Array(8)].map((_, i) => (
-              <div key={i} className="skeleton-line" style={{ height: "40px", opacity: 1 - i * 0.08 }} />
+        {/* Role filter */}
+        {roles.length > 0 && (
+          <div style={{ ...s.tabRow, gap: "0.4rem" }}>
+            {roles.map((r) => (
+              <button
+                key={r}
+                onClick={() => setRole(r)}
+                style={{
+                  ...s.roleBtn,
+                  background: role === r ? "rgba(255,255,255,0.15)" : "transparent",
+                  color: role === r ? "white" : "rgba(255,255,255,0.45)",
+                  borderColor: role === r ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.1)",
+                }}
+              >
+                {r}
+              </button>
             ))}
           </div>
         )}
 
-        {loaded && filteredPlayers.length === 0 && !error && (
-          <div style={{ padding: "2.5rem 1rem", textAlign: "center", opacity: 0.5 }}>
-            {search ? "No players match your search." : "No players match these filters."}
-          </div>
-        )}
+        {/* Search */}
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search player or Riot ID…"
+          style={s.searchInput}
+        />
 
-        {filteredPlayers.map((p, i) => {
-          const isValPlayer = p.game === "Valorant";
-          return (
-            <div key={p.slug} className="data-row row-enter" style={{ ...s.row, animationDelay: `${i * 0.025}s` }}>
-              <div style={s.rankCol}>
-                <span style={{ ...s.rankBadge, background: i < 3 ? activeColor : "rgba(255,255,255,0.08)" }}>
-                  {i + 1}
-                </span>
-              </div>
-              <div style={s.nameCol}>
-                <Link
-                  href={`/players/${p.slug}`}
-                  style={{ fontWeight: 600, color: "white", textDecoration: "none" }}
-                  className="player-link"
-                >
-                  {p.name}
-                </Link>
-                <span
-                  style={{
-                    ...s.gameBadge,
-                    background: isValPlayer ? "rgba(255,70,85,0.15)" : "rgba(200,155,60,0.15)",
-                    color: isValPlayer ? "#ff4655" : "#c89b3c",
-                    marginLeft: 8,
-                  }}
-                >
-                  {isValPlayer ? "VAL" : "LoL"}
-                </span>
-              </div>
-              <div style={{ ...s.teamCol, opacity: 0.8 }}>{p.team_name}</div>
-              <div style={s.roleCol}>{p.role}</div>
-              <div className="tabular-nums" style={s.stat}>
-                {isValPlayer ? (p.stats.kd ?? "-") : (p.stats.kda ?? "-")}
-              </div>
-              <div className="tabular-nums" style={s.stat}>
-                {isValPlayer ? (p.stats.acs ?? "-") : (p.stats.kills_per_game ?? "-")}
-              </div>
-              <div className="tabular-nums" style={s.stat}>
-                {isValPlayer ? (p.stats.adr ?? "-") : (p.stats.deaths_per_game ?? "-")}
-              </div>
-              <div className="tabular-nums" style={s.stat}>
-                {isValPlayer ? (p.stats.hs_percent != null ? `${p.stats.hs_percent}%` : "-") : (p.stats.assists_per_game ?? "-")}
-              </div>
-              <div className="tabular-nums" style={s.ratingCol}>
-                <span style={{ fontWeight: 700, color: ratingColor(p.rating) }}>{p.rating}</span>
-              </div>
+        {error && <p style={{ color: "#f87171" }}>{error}</p>}
+
+        {/* Player table */}
+        <section style={{ ...s.card, borderColor: `${activeColor}55` }}>
+          <div style={{ ...s.row, ...s.header }}>
+            <div style={s.rankCol}>#</div>
+            <div style={s.nameCol}>Player</div>
+            <div style={s.riotCol}>Riot ID</div>
+            <div style={s.teamCol}>Team</div>
+            <div style={s.roleCol}>Role</div>
+            <div style={s.gameCol}>Game</div>
+          </div>
+
+          {!loaded && !error && (
+            <div style={{ padding: "1rem", display: "flex", flexDirection: "column", gap: "0.6rem" }}>
+              {[...Array(8)].map((_, i) => (
+                <div key={i} className="skeleton-line" style={{ height: "40px", opacity: 1 - i * 0.08 }} />
+              ))}
             </div>
-          );
-        })}
-      </section>
+          )}
+
+          {loaded && filteredPlayers.length === 0 && !error && (
+            <div style={{ padding: "2.5rem 1rem", textAlign: "center", opacity: 0.5 }}>
+              {search ? "No players match your search." : "No players match these filters."}
+            </div>
+          )}
+
+          {filteredPlayers.map((p, i) => {
+            const isVal = p.game !== "League of Legends";
+            return (
+              <div
+                key={p.slug}
+                className="data-row row-enter"
+                style={{ ...s.row, animationDelay: `${i * 0.025}s` }}
+              >
+                <div style={s.rankCol}>
+                  <span style={{ ...s.rankBadge, background: i < 3 ? activeColor : "rgba(255,255,255,0.08)" }}>
+                    {i + 1}
+                  </span>
+                </div>
+
+                <div style={s.nameCol}>
+                  <Link
+                    href={`/players/${p.slug}`}
+                    style={{ fontWeight: 600, color: "white", textDecoration: "none" }}
+                    className="player-link"
+                  >
+                    {p.displayName}
+                  </Link>
+                </div>
+
+                <div style={{ ...s.riotCol, opacity: 0.65, fontSize: "0.82rem" }}>
+                  {p.riotId ?? "—"}
+                </div>
+
+                <div style={{ ...s.teamCol, opacity: 0.8 }}>
+                  {p.team_name || "—"}
+                </div>
+
+                <div style={s.roleCol}>
+                  {p.role || "—"}
+                </div>
+
+                <div style={s.gameCol}>
+                  <span
+                    style={{
+                      ...s.gameBadge,
+                      background: isVal ? "rgba(255,70,85,0.15)" : "rgba(200,155,60,0.15)",
+                      color: isVal ? "#ff4655" : "#c89b3c",
+                    }}
+                  >
+                    {isVal ? "VAL" : "LoL"}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </section>
       </div>
     </main>
   );
@@ -250,7 +211,11 @@ function PlayersContent() {
 
 export default function PlayersPage() {
   return (
-    <Suspense fallback={<main style={{ minHeight: "100dvh", backgroundColor: "#0d1526", color: "white", padding: "2rem" }} />}>
+    <Suspense
+      fallback={
+        <main style={{ minHeight: "100dvh", backgroundColor: "#0d1526", color: "white", padding: "2rem" }} />
+      }
+    >
       <PlayersContent />
     </Suspense>
   );
@@ -292,17 +257,15 @@ const s: Record<string, CSSProperties> = {
     fontSize: "0.85rem",
     transition: "all 0.15s",
   },
-
   card: {
     border: "1px solid rgba(255,255,255,0.15)",
     background: "rgba(255,255,255,0.04)",
     borderRadius: 16,
     overflow: "hidden",
   },
-
   row: {
     display: "grid",
-    gridTemplateColumns: "50px 1.4fr 1.3fr 90px 65px 65px 65px 65px 80px",
+    gridTemplateColumns: "50px 1.4fr 1.6fr 1.2fr 100px 70px",
     gap: "0.5rem",
     padding: "0.75rem 1rem",
     alignItems: "center",
@@ -316,7 +279,6 @@ const s: Record<string, CSSProperties> = {
     letterSpacing: "0.05em",
     opacity: 0.8,
   },
-
   rankCol: { textAlign: "center" as const },
   rankBadge: {
     display: "inline-flex",
@@ -329,10 +291,10 @@ const s: Record<string, CSSProperties> = {
     fontSize: "0.85rem",
   },
   nameCol: { display: "flex", alignItems: "center" },
+  riotCol: { fontSize: "0.9rem" },
   teamCol: { fontSize: "0.9rem" },
   roleCol: { fontSize: "0.9rem", opacity: 0.85 },
-  stat: { textAlign: "center" as const, fontSize: "0.9rem" },
-  ratingCol: { textAlign: "center" as const },
+  gameCol: { textAlign: "center" as const },
   gameBadge: {
     padding: "0.15rem 0.45rem",
     borderRadius: 5,
