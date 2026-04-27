@@ -6,8 +6,8 @@ import Link from "next/link";
 import Image from "next/image";
 
 const navItems = [
+  { label: "StratOS", href: "https://c9-stratos.vercel.app/", external: true },
   { label: "Leagues", href: "/leagues" },
-  { label: "Tournaments", href: "/tournaments" },
   { label: "Teams", href: "/teams" },
   { label: "Players", href: "/players" },
   { label: "Matches", href: "/matches" },
@@ -60,7 +60,23 @@ export default function Navbar() {
       {/* Nav links — absolutely centered in the bar */}
       <nav className="navbar-links" aria-label="Main navigation">
         {navItems.map((item) => {
-          const isActive = item.href !== "/" && pathname.startsWith(item.href);
+          const isActive = !item.external && item.href !== "/" && pathname.startsWith(item.href);
+          const isVCT = item.label === "StratOS";
+
+          if (item.external) {
+            return (
+              <a
+                key={item.label}
+                href={item.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={`navbar-link${isVCT ? " navbar-link--vct" : ""}`}
+              >
+                {item.label}
+              </a>
+            );
+          }
+
           return (
             <Link
               key={item.label}
