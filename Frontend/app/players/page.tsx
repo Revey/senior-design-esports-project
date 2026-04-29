@@ -42,23 +42,48 @@ function PlayersContent() {
   useEffect(() => {
     setError(null);
     setLoaded(false);
-    const params = new URLSearchParams({ limit: "200" });
-    if (game !== "All") params.set("game", game);
-    if (role !== "All") params.set("role", role);
 
-    fetch(`${API}/api/players?${params}`)
-      .then((r) => {
-        if (!r.ok) throw new Error(`Failed to load players (${r.status})`);
-        return r.json() as Promise<Player[]>;
-      })
-      .then((data) => {
-        setPlayers(data);
-        setLoaded(true);
-      })
-      .catch((e: Error) => setError(e.message));
+    if (game === "All") {
+      // Fetch both Valorant and LoL in parallel then merge
+      const valParams = new URLSearchParams({ limit: "200", game: "Valorant" });
+      const lolParams = new URLSearchParams({ limit: "200", game: "League of Legends" });
+
+      Promise.all([
+        fetch(`${API}/api/players?${valParams}`).then((r) => {
+          if (!r.ok) throw new Error(`Failed to load Valorant players (${r.status})`);
+          return r.json() as Promise<Player[]>;
+        }),
+        fetch(`${API}/api/players?${lolParams}`).then((r) => {
+          if (!r.ok) throw new Error(`Failed to load LoL players (${r.status})`);
+          return r.json() as Promise<Player[]>;
+        }),
+      ])
+        .then(([val, lol]) => {
+          // Interleave: Valorant first, then LoL — or sort alphabetically
+          setPlayers([...val, ...lol]);
+          setLoaded(true);
+        })
+        .catch((e: Error) => setError(e.message));
+    } else {
+      const params = new URLSearchParams({ limit: "200", game });
+      if (role !== "All") params.set("role", role);
+
+      fetch(`${API}/api/players?${params}`)
+        .then((r) => {
+          if (!r.ok) throw new Error(`Failed to load players (${r.status})`);
+          return r.json() as Promise<Player[]>;
+        })
+        .then((data) => {
+          setPlayers(data);
+          setLoaded(true);
+        })
+        .catch((e: Error) => setError(e.message));
+    }
   }, [game, role]);
 
-  useEffect(() => { setRole("All"); }, [game]);
+  useEffect(() => {
+    setRole("All");
+  }, [game]);
 
   const needle = search.toLowerCase();
   const filteredPlayers = needle
@@ -98,7 +123,7 @@ function PlayersContent() {
           })}
         </div>
 
-        {/* Role filter */}
+        {/* Role filter — only shown when a specific game is selected */}
         {roles.length > 0 && (
           <div style={{ ...s.tabRow, gap: "0.4rem" }}>
             {roles.map((r) => (
@@ -122,7 +147,7 @@ function PlayersContent() {
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search player or Riot ID…"
+          placeholder="Search player, Riot ID, or team…"
           style={s.searchInput}
         />
 
@@ -130,6 +155,7 @@ function PlayersContent() {
 
         {/* Player table */}
         <section style={{ ...s.card, borderColor: `${activeColor}55` }}>
+          {/* Header row */}
           <div style={{ ...s.row, ...s.header }}>
             <div style={s.rankCol}>#</div>
             <div style={s.nameCol}>Player</div>
@@ -139,6 +165,7 @@ function PlayersContent() {
             <div style={s.gameCol}>Game</div>
           </div>
 
+          {/* Loading skeletons */}
           {!loaded && !error && (
             <div style={{ padding: "1rem", display: "flex", flexDirection: "column", gap: "0.6rem" }}>
               {[...Array(8)].map((_, i) => (
@@ -147,26 +174,35 @@ function PlayersContent() {
             </div>
           )}
 
+          {/* Empty state */}
           {loaded && filteredPlayers.length === 0 && !error && (
             <div style={{ padding: "2.5rem 1rem", textAlign: "center", opacity: 0.5 }}>
               {search ? "No players match your search." : "No players match these filters."}
             </div>
           )}
 
+          {/* Rows */}
           {filteredPlayers.map((p, i) => {
             const isVal = p.game !== "League of Legends";
             return (
               <div
-                key={p.slug}
+                key={p.slug + i}
                 className="data-row row-enter"
                 style={{ ...s.row, animationDelay: `${i * 0.025}s` }}
               >
+                {/* Rank */}
                 <div style={s.rankCol}>
-                  <span style={{ ...s.rankBadge, background: i < 3 ? activeColor : "rgba(255,255,255,0.08)" }}>
+                  <span
+                    style={{
+                      ...s.rankBadge,
+                      background: i < 3 ? activeColor : "rgba(255,255,255,0.08)",
+                    }}
+                  >
                     {i + 1}
                   </span>
                 </div>
 
+                {/* Display name */}
                 <div style={s.nameCol}>
                   <Link
                     href={`/players/${p.slug}`}
@@ -177,18 +213,22 @@ function PlayersContent() {
                   </Link>
                 </div>
 
+                {/* Riot ID */}
                 <div style={{ ...s.riotCol, opacity: 0.65, fontSize: "0.82rem" }}>
-                  {p.riotId ?? "—"}
+                  {p.riotId || "—"}
                 </div>
 
+                {/* Team */}
                 <div style={{ ...s.teamCol, opacity: 0.8 }}>
                   {p.team_name || "—"}
                 </div>
 
-                <div style={s.roleCol}>
+                {/* Role — show "—" gracefully if not yet assigned */}
+                <div style={{ ...s.roleCol, opacity: p.role ? 0.85 : 0.4 }}>
                   {p.role || "—"}
                 </div>
 
+                {/* Game badge */}
                 <div style={s.gameCol}>
                   <span
                     style={{
@@ -213,7 +253,9 @@ export default function PlayersPage() {
   return (
     <Suspense
       fallback={
-        <main style={{ minHeight: "100dvh", backgroundColor: "#0d1526", color: "white", padding: "2rem" }} />
+        <main
+          style={{ minHeight: "100dvh", backgroundColor: "#0d1526", color: "white", padding: "2rem" }}
+        />
       }
     >
       <PlayersContent />
@@ -223,9 +265,13 @@ export default function PlayersPage() {
 
 const s: Record<string, CSSProperties> = {
   container: { minHeight: "100dvh", backgroundColor: "#0d1526", color: "white", padding: "2rem" },
-  title: { fontSize: "clamp(1.6rem, 3vw, 2.2rem)", fontWeight: 700, letterSpacing: "-0.02em", margin: 0 },
+  title: {
+    fontSize: "clamp(1.6rem, 3vw, 2.2rem)",
+    fontWeight: 700,
+    letterSpacing: "-0.02em",
+    margin: 0,
+  },
   subtitle: { marginTop: "0.35rem", opacity: 0.55, marginBottom: "1.5rem", fontSize: "0.95rem" },
-
   searchInput: {
     width: "100%",
     maxWidth: 360,
@@ -293,7 +339,7 @@ const s: Record<string, CSSProperties> = {
   nameCol: { display: "flex", alignItems: "center" },
   riotCol: { fontSize: "0.9rem" },
   teamCol: { fontSize: "0.9rem" },
-  roleCol: { fontSize: "0.9rem", opacity: 0.85 },
+  roleCol: { fontSize: "0.9rem" },
   gameCol: { textAlign: "center" as const },
   gameBadge: {
     padding: "0.15rem 0.45rem",

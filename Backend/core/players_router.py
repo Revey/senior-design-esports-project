@@ -11,6 +11,9 @@ router = APIRouter()
 
 _PMS = "player match stats"
 
+# Collection name for League of Legends players scraped from CLOL
+_CLOL = "CLOL_player_stats"
+
 
 def _serialize(doc: Any) -> Any:
     """Recursively convert ObjectId and other non-JSON-safe BSON types to str."""
@@ -34,10 +37,43 @@ def _normalize(doc: dict[str, Any], team_name: str = "", team_slug: str = "") ->
         "displayName": display_name,
         "riotId": doc.get("riotId"),
         "role": doc.get("role") or "",
-        "game": doc.get("game", "Valorant"),  # all current players are Valorant
+        "game": doc.get("game", "Valorant"),
         "team_name": team_name,
         "team_slug": team_slug,
         "active": doc.get("active", True),
+    }
+
+
+def _normalize_clol(doc: dict[str, Any]) -> dict[str, Any]:
+    """
+    Map a CLOL_player_stats document to the same shape the frontend expects.
+
+    Field mapping:
+      display_name        → displayName  (falls back to game_name)
+      riot_id             → riotId
+      team_role_from_clol → role (preferred; title-cased)
+      main_role           → role fallback (title-cased, e.g. JUNGLE → Jungle)
+      team_name           → team_name  (stored directly on the doc)
+    """
+    display_name = doc.get("display_name") or doc.get("game_name") or "Unknown"
+    # Slug: strip the #TAG portion so URLs stay clean, then slugify
+    base_name = (doc.get("game_name") or display_name).split("#")[0]
+    slug = base_name.lower().replace(" ", "-")
+
+    # Role preference: explicit CLOL roster role first, then derived main_role
+    raw_role = doc.get("team_role_from_clol") or doc.get("main_role") or ""
+    role = raw_role.title() if raw_role else ""
+
+    return {
+        "_id": str(doc["_id"]) if "_id" in doc else None,
+        "slug": slug,
+        "displayName": display_name,
+        "riotId": doc.get("riot_id") or "",
+        "role": role,
+        "game": "League of Legends",
+        "team_name": doc.get("team_name") or "",
+        "team_slug": "",   # CLOL docs don't reference the teams collection
+        "active": True,
     }
 
 
@@ -79,21 +115,51 @@ def list_players(
     if db is None:
         raise HTTPException(503, "Database unavailable")
 
-    filt: dict[str, Any] = {}
-    # All current players are Valorant; filter out if LoL is requested
+    # ------------------------------------------------------------------ #
+    # League of Legends players come from CLOL_player_stats, not players  #
+    # ------------------------------------------------------------------ #
     if game == "League of Legends":
-        filt["game"] = "League of Legends"
-    elif game == "Valorant":
-        filt["$or"] = [{"game": "Valorant"}, {"game": {"$exists": False}}]
+        filt: dict[str, Any] = {}
+        if team:
+            filt["team_name"] = team
+
+        # Role filter: match against both team_role_from_clol and main_role.
+        # The filter values from the frontend are title-cased (e.g. "Jungle"),
+        # while main_role is stored as ALL-CAPS ("JUNGLE"), so we match both.
+        if role and role != "All":
+            filt["$or"] = [
+                {"team_role_from_clol": role},
+                {"main_role": role.upper()},
+            ]
+
+        sort_dir = -1 if order == "desc" else 1
+        # Sort by display_name ascending by default
+        mongo_sort = "display_name" if sort == "displayName" else sort
+
+        docs = list(
+            db[_CLOL]
+            .find(filt, {"last_updated_text": 0})  # exclude the large scraped blob
+            .sort(mongo_sort, sort_dir)
+            .limit(limit)
+        )
+
+        return [_serialize(_normalize_clol(doc)) for doc in docs]
+
+    # ------------------------------------------------------------------ #
+    # All other cases: query the existing players collection (Valorant)   #
+    # ------------------------------------------------------------------ #
+    val_filt: dict[str, Any] = {}
+    if game == "Valorant":
+        val_filt["$or"] = [{"game": "Valorant"}, {"game": {"$exists": False}}]
     if team:
-        filt["team_slug"] = team
+        val_filt["team_slug"] = team
     if role and role != "All":
-        filt["role"] = role
+        val_filt["role"] = role
 
     sort_dir = -1 if order == "desc" else 1
     mongo_sort = sort if sort in ("displayName", "role", "game") else "displayName"
 
-    docs = list(db["players"].find(filt).sort(mongo_sort, sort_dir).limit(limit))
+    docs = list(db["players"].find(val_filt).sort(mongo_sort, sort_dir).limit(limit))
 
     team_map = _resolve_teams(db, docs)
 
@@ -117,7 +183,7 @@ def get_player(slug: str):
     if db is None:
         raise HTTPException(503, "Database unavailable")
 
-    # Try stored slug first, then derive from displayName
+    # Try the Valorant players collection first
     player_doc = db["players"].find_one({"slug": slug})
     if not player_doc:
         for p in db["players"].find({}, {"displayName": 1, "_id": 1}):
@@ -125,31 +191,61 @@ def get_player(slug: str):
                 player_doc = db["players"].find_one({"_id": p["_id"]})
                 break
 
-    if not player_doc:
+    if player_doc:
+        # Resolve team name from the teams collection
+        team_ids = player_doc.get("teamIds", [])
+        t_name, t_slug = "", ""
+        if team_ids:
+            first_tid = team_ids[0] if isinstance(team_ids[0], ObjectId) else None
+            if first_tid:
+                team_doc = db["teams"].find_one({"_id": first_tid}, {"name": 1, "slug": 1})
+                if team_doc:
+                    t_name = team_doc.get("name", "")
+                    t_slug = team_doc.get("slug", "")
+
+        player = _normalize(player_doc, t_name, t_slug)
+        player_oid = player_doc.get("_id")
+
+        stats_filt: dict[str, Any] = (
+            {"playerId": player_oid} if player_oid else {"riotId": player_doc.get("riotId")}
+        )
+        stat_rows = list(db[_PMS].find(stats_filt).sort("_id", -1).limit(25))
+        recent_matches = [_clean(r) for r in stat_rows]
+
+        freq_field = "agent"
+        freq = Counter(r.get(freq_field) for r in stat_rows if r.get(freq_field))
+        frequency = [{"name": n, "count": c} for n, c in freq.most_common()]
+
+        return _serialize({
+            **player,
+            "recent_matches": recent_matches,
+            "frequency": frequency,
+            "frequency_field": freq_field,
+        })
+
+    # ------------------------------------------------------------ #
+    # Fall back to CLOL_player_stats for League of Legends players  #
+    # ------------------------------------------------------------ #
+    # Slug was derived from game_name (without #TAG), so match on that
+    clol_doc = None
+    for doc in db[_CLOL].find({}, {"game_name": 1, "display_name": 1, "_id": 1, "last_updated_text": 0}):
+        candidate = (doc.get("game_name") or "").split("#")[0].lower().replace(" ", "-")
+        if candidate == slug:
+            clol_doc = db[_CLOL].find_one({"_id": doc["_id"]}, {"last_updated_text": 0})
+            break
+
+    if not clol_doc:
         raise HTTPException(404, f"Player '{slug}' not found")
 
-    # Resolve team name
-    team_ids = player_doc.get("teamIds", [])
-    t_name, t_slug = "", ""
-    if team_ids:
-        first_tid = team_ids[0] if isinstance(team_ids[0], ObjectId) else None
-        if first_tid:
-            team_doc = db["teams"].find_one({"_id": first_tid}, {"name": 1, "slug": 1})
-            if team_doc:
-                t_name = team_doc.get("name", "")
-                t_slug = team_doc.get("slug", "")
+    player = _normalize_clol(clol_doc)
 
-    player = _normalize(player_doc, t_name, t_slug)
-    player_oid = player_doc.get("_id")
-
-    stats_filt: dict[str, Any] = (
-        {"playerId": player_oid} if player_oid else {"riotId": player_doc.get("riotId")}
-    )
-
+    # LoL match stats (from player match stats collection, keyed by riotId)
+    riot_id = clol_doc.get("riot_id") or ""
+    stats_filt = {"riotId": riot_id} if riot_id else {"_id": None}
     stat_rows = list(db[_PMS].find(stats_filt).sort("_id", -1).limit(25))
     recent_matches = [_clean(r) for r in stat_rows]
 
-    freq_field = "agent" if player.get("game") == "Valorant" else "champion"
+    freq_field = "champion"
     freq = Counter(r.get(freq_field) for r in stat_rows if r.get(freq_field))
     frequency = [{"name": n, "count": c} for n, c in freq.most_common()]
 
