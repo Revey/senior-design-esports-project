@@ -1,98 +1,133 @@
-"""
-pip install pymongo python-dotenv certifi
+"""Upsert CLoL team rosters into the PostgreSQL `players` table.
 
+Reads `clol_teams_puuids.json` (produced by BuildClol_teams_puuids.py), iterates
+each team's player list, and upserts one row per player into `players` keyed on
+riot_puuid via INSERT ... ON CONFLICT DO UPDATE.
+
+Requires DATABASE_URL to be set in the environment.
+
+Run from the Backend/ directory:
+    python League/StorePlayer.py
 """
+
+from __future__ import annotations
+
 import json
 import os
+import sys
 from pathlib import Path
+from typing import Iterable
 
 from dotenv import load_dotenv
-from pymongo import MongoClient
-from pymongo.errors import PyMongoError
-import certifi
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from core.db import get_cursor  # noqa: E402
 
 
-def load_json_file(file_path: Path):
-    with file_path.open("r", encoding="utf-8") as f:
-        return json.load(f)
+GAME = "League of Legends"
 
 
-def normalize_to_list(data):
-    if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
-        return [data]
-    raise ValueError("JSON must contain either a list of objects or a single object.")
+def _iter_players(teams: Iterable[dict]) -> Iterable[tuple[dict, dict]]:
+    """Yield (team_doc, player_doc) for every player across all teams."""
+    for team in teams:
+        for player in team.get("players", []) or []:
+            yield team, player
 
 
-def main():
+def _slugify(s: str) -> str:
+    import re
+
+    s = (s or "").lower().strip()
+    s = re.sub(r"[^a-z0-9]+", "-", s)
+    return s.strip("-") or None
+
+
+def main() -> None:
     load_dotenv()
 
-    mongo_uri = os.getenv("MONGO_URI")
-    mongo_db_name = os.getenv("MONGO_DB", "senior_design_esports")
-    mongo_collection_name = os.getenv("MONGO_COLLECTION", "CLOL")
+    if not os.getenv("DATABASE_URL"):
+        raise SystemExit("Missing DATABASE_URL in environment")
 
-    if not mongo_uri:
-        raise ValueError("Missing MONGO_URI in .env")
-
-    script_dir = Path(__file__).resolve().parent
-    json_file = script_dir / "clol_teams_puuids.json"
-
+    json_file = Path(__file__).resolve().parent / "clol_teams_puuids.json"
     if not json_file.exists():
         raise FileNotFoundError(f"Could not find file: {json_file}")
 
-    data = load_json_file(json_file)
-    documents = normalize_to_list(data)
+    with json_file.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+    teams = data if isinstance(data, list) else [data]
 
-    client = MongoClient(
-        mongo_uri,
-        tls=True,
-        tlsCAFile=certifi.where()
-    )
+    inserted = 0
+    updated = 0
+    skipped = 0
 
-    try:
-        db = client[mongo_db_name]
-        collection = db[mongo_collection_name]
-
-        # Optional but strongly recommended:
-        # ensures team_name stays unique in this collection
-        collection.create_index("team_name", unique=True)
-
-        inserted_count = 0
-        replaced_count = 0
-
-        for doc in documents:
-            if not isinstance(doc, dict):
-                print("Skipping non-object entry in JSON.")
+    with get_cursor(commit=True) as cur:
+        for team, player in _iter_players(teams):
+            puuid = (player.get("puuid") or "").strip() or None
+            display_name = (player.get("display_name") or player.get("summoner_name") or "").strip()
+            if not display_name:
+                skipped += 1
                 continue
 
-            team_name = doc.get("team_name")
-            if not team_name:
-                print("Skipping document with no team_name:", doc)
-                continue
+            riot_id = (player.get("riot_id") or "").strip() or None
+            game_name = (player.get("game_name") or "").strip() or None
+            tag_line = (player.get("tag_line") or "").strip() or None
+            role = (player.get("role") or "").strip() or None
+            slug = _slugify(f"{display_name}-{team.get('team_name', '')}")
 
-            result = collection.replace_one(
-                {"team_name": team_name},
-                doc,
-                upsert=True
-            )
-
-            if result.matched_count > 0:
-                replaced_count += 1
+            # If puuid is present use it as the conflict target; otherwise
+            # insert without conflict resolution (no unique key available).
+            if puuid:
+                cur.execute(
+                    """
+                    INSERT INTO players (
+                        slug, display_name, riot_id, riot_puuid,
+                        game_name, tag_line, role, game, last_updated
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT (riot_puuid) DO UPDATE SET
+                        display_name = EXCLUDED.display_name,
+                        riot_id = EXCLUDED.riot_id,
+                        game_name = EXCLUDED.game_name,
+                        tag_line = EXCLUDED.tag_line,
+                        role = COALESCE(EXCLUDED.role, players.role),
+                        game = EXCLUDED.game,
+                        last_updated = NOW()
+                    RETURNING (xmax = 0) AS inserted
+                    """,
+                    (slug, display_name, riot_id, puuid, game_name, tag_line, role, GAME),
+                )
+                was_inserted = cur.fetchone()["inserted"]
             else:
-                inserted_count += 1
+                cur.execute(
+                    """
+                    INSERT INTO players (
+                        slug, display_name, riot_id, game_name, tag_line, role, game, last_updated
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT (slug) DO UPDATE SET
+                        display_name = EXCLUDED.display_name,
+                        riot_id = EXCLUDED.riot_id,
+                        game_name = EXCLUDED.game_name,
+                        tag_line = EXCLUDED.tag_line,
+                        role = COALESCE(EXCLUDED.role, players.role),
+                        game = EXCLUDED.game,
+                        last_updated = NOW()
+                    RETURNING (xmax = 0) AS inserted
+                    """,
+                    (slug, display_name, riot_id, game_name, tag_line, role, GAME),
+                )
+                was_inserted = cur.fetchone()["inserted"]
 
-        print(f"Finished syncing data to MongoDB.")
-        print(f"Inserted: {inserted_count}")
-        print(f"Replaced: {replaced_count}")
-        print(f"Database: {mongo_db_name}")
-        print(f"Collection: {mongo_collection_name}")
-        print(f"Source file: {json_file.name}")
+            if was_inserted:
+                inserted += 1
+            else:
+                updated += 1
 
-    except PyMongoError as e:
-        print("MongoDB error:", e)
-    finally:
-        client.close()
+    print(f"Done syncing CLoL rosters → players")
+    print(f"Inserted: {inserted}")
+    print(f"Updated:  {updated}")
+    print(f"Skipped:  {skipped}")
+    print(f"Source:   {json_file.name}")
 
 
 if __name__ == "__main__":

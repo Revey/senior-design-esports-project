@@ -2,12 +2,12 @@
 ScrapeCSUCustomGames.py
 -----------------------
 Scrapes each CSU Valorant player's custom game match history from tracker.gg
-and stores the aggregated results in MongoDB (VAL_custom_stats collection).
+and merges the per-player aggregates into `players.stats` (JSONB) in Postgres.
 
 Uses Playwright for browser automation because tracker.gg is JavaScript-rendered.
 
 Requirements:
-    pip install playwright pymongo python-dotenv certifi
+    pip install playwright python-dotenv psycopg2-binary
     playwright install chromium
 
 Run from the Backend/ directory:
@@ -19,25 +19,22 @@ Add/correct player gameName and tagLine there before running.
 NOTE: tracker.gg may block bots. If pages consistently fail to load stats,
 try setting HEADLESS = False below to watch the browser and diagnose.
 
---- CHANGELOG (2026-04-05) ---
-Fixed two root causes of zero results:
-  1. WRONG URL: old code used /matches?playlist=custom
-     Correct URL is /customs?platform=pc
-  2. WRONG SELECTORS: tracker.gg redesigned their frontend.
-     All selectors updated to match the current v3 DOM structure.
+Players are resolved by game_name+tag_line in the `players` table — run
+StorePlayer.py first so those rows exist.
 """
 
 import json
 import os
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-import certifi
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
-from pymongo import MongoClient
-from pymongo.errors import PyMongoError
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from core.db import get_cursor  # noqa: E402
 
 load_dotenv()
 
@@ -45,10 +42,6 @@ load_dotenv()
 
 SCRIPT_DIR        = Path(__file__).resolve().parent
 ROSTER_FILE       = SCRIPT_DIR / "rosters" / "CSUValGreen.json"
-
-MONGO_URI             = os.getenv("MONGO_URI", "")
-MONGO_DB              = os.getenv("MONGO_DB", "senior_design_esports")
-CUSTOM_STATS_COLL     = "VAL_custom_stats"
 
 HEADLESS          = True    # Set False to watch the browser (useful for debugging)
 PAGE_TIMEOUT_MS   = 30_000
@@ -291,26 +284,45 @@ def aggregate_matches(matches: list[dict]) -> dict:
     }
 
 
-# ── MongoDB ───────────────────────────────────────────────────────────────────
+# ── Postgres upsert ───────────────────────────────────────────────────────────
 
-def upsert_player_stats(db, player_name: str, riot_id: str,
-                        matches: list[dict], aggregates: dict) -> None:
-    doc = {
-        "riot_id":    riot_id,
-        "player_name": player_name,
-        "scraped_at": datetime.now(timezone.utc),
-        "matches":    matches,
-        "aggregates": aggregates,
+def upsert_player_stats(game_name: str, tag_line: str, riot_id: str,
+                        matches: list[dict], aggregates: dict) -> str:
+    """Merge the custom-game payload into `players.stats` for the matching
+    player, looked up by game_name + tag_line or fallback riot_id.
+
+    Returns "updated", "not_found", or "error".
+    """
+    payload = {
+        "custom_stats": {
+            "riot_id":    riot_id,
+            "scraped_at": datetime.now(timezone.utc).isoformat(),
+            "matches":    matches,
+            "aggregates": aggregates,
+        },
     }
     try:
-        db[CUSTOM_STATS_COLL].update_one(
-            {"riot_id": riot_id},
-            {"$set": doc},
-            upsert=True,
-        )
-        print(f"    Saved to MongoDB: {riot_id}")
-    except PyMongoError as e:
-        print(f"    MongoDB error for {riot_id}: {e}")
+        with get_cursor(commit=True) as cur:
+            cur.execute(
+                """
+                UPDATE players
+                   SET stats = COALESCE(stats, '{}'::jsonb) || %s::jsonb,
+                       last_updated = NOW()
+                 WHERE (game_name = %s AND tag_line = %s)
+                    OR riot_id = %s
+                 RETURNING id
+                """,
+                (json.dumps(payload), game_name, tag_line, riot_id),
+            )
+            found = cur.fetchone()
+            if found:
+                print(f"    Saved to Postgres: {riot_id}")
+                return "updated"
+            print(f"    No matching player row for {riot_id}")
+            return "not_found"
+    except Exception as e:
+        print(f"    Postgres error for {riot_id}: {e}")
+        return "error"
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -335,16 +347,12 @@ def main():
     print(f"\nTeam: {team_name}")
     print(f"Players: {len(players)}\n")
 
-    # MongoDB connection (optional — results also printed to console)
-    db = None
-    if MONGO_URI:
-        try:
-            client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
-            db = client[MONGO_DB]
-            db.command("ping")
-            print("MongoDB connected.\n")
-        except Exception as e:
-            print(f"MongoDB connection failed (will still print results): {e}\n")
+    # Postgres is optional — results also always go to the JSON backup
+    pg_available = bool(os.getenv("DATABASE_URL"))
+    if pg_available:
+        print("Postgres target: players.stats (JSONB)\n")
+    else:
+        print("DATABASE_URL not set — results will go to JSON backup only.\n")
 
     all_results = []
 
@@ -392,8 +400,8 @@ def main():
             }
             all_results.append(result_entry)
 
-            if db is not None and matches:
-                upsert_player_stats(db, name, riot_id, matches, aggregates)
+            if pg_available and matches:
+                upsert_player_stats(game_name, tag_line, riot_id, matches, aggregates)
 
             if idx < len(players):
                 time.sleep(BETWEEN_PLAYERS_S)
@@ -402,7 +410,7 @@ def main():
         context.close()
         browser.close()
 
-    # Always write a local JSON backup regardless of MongoDB
+    # Always write a local JSON backup regardless of Postgres reachability
     out_file = SCRIPT_DIR / "custom_games_results.json"
     with open(out_file, "w") as f:
         json.dump(all_results, f, indent=2, default=str)

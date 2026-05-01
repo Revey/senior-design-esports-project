@@ -1,23 +1,17 @@
 """
 Entry point for the esports backend server.
 
-Run with:
-    uvicorn main:app --reload --host 0.0.0.0 --port 8000
-"""
-"""
-Entry point for the esports backend server.
-
 Run locally with:
     uvicorn main:app --reload --host 0.0.0.0 --port 8000
 """
 
 import logging
 import os
-import certifi
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pymongo import MongoClient
+
+from core.db import get_cursor
 
 try:
     from slowapi import Limiter
@@ -87,28 +81,18 @@ logger = logging.getLogger(__name__)
 # --------------------------------------------------------------------
 load_dotenv()
 
-MONGO_URI = os.getenv("MONGO_URI")
-MONGO_DB = os.getenv("MONGO_DB", "senior_design_esports")
-MONGO_TARGET_COLLECTION = os.getenv("MONGO_TARGET_COLLECTION", "CLOL_player_stats")
-
-if not MONGO_URI:
-    raise RuntimeError("Missing MONGO_URI environment variable.")
+if not os.getenv("DATABASE_URL"):
+    raise RuntimeError("Missing DATABASE_URL environment variable.")
 
 
 # --------------------------------------------------------------------
-# MongoDB
+# Postgres health check
 # --------------------------------------------------------------------
-client = MongoClient(
-    MONGO_URI,
-    tls=True,
-    tlsCAFile=certifi.where(),
-    serverSelectionTimeoutMS=5000,
-    connectTimeoutMS=5000,
-    socketTimeoutMS=5000,
-)
-
-db = client[MONGO_DB]
-players_collection = db[MONGO_TARGET_COLLECTION]
+def _db_ping() -> None:
+    """Raise if Postgres is unreachable. Used by /health probes."""
+    with get_cursor() as cur:
+        cur.execute("SELECT 1")
+        cur.fetchone()
 
 
 # --------------------------------------------------------------------
@@ -162,43 +146,6 @@ else:
 
 
 # --------------------------------------------------------------------
-# Helpers
-# --------------------------------------------------------------------
-def normalize_player_doc(doc: dict) -> dict:
-    if "_id" in doc:
-        doc["_id"] = str(doc["_id"])
-
-    defaults = {
-        "team_name": None,
-        "school": None,
-        "display_name": None,
-        "team_role_from_clol": None,
-        "riot_id": None,
-        "game_name": None,
-        "tag_line": None,
-        "puuid": None,
-        "updated_at_utc": None,
-        "scrape_status": None,
-        "source": None,
-        "opgg_url": None,
-        "summoner_name": None,
-        "ladder_rank": None,
-        "error": None,
-        "solo_duo_rank": None,
-        "highest_rank": None,
-        "flex_rank": None,
-        "top_roles": [],
-        "main_role": None,
-        "top_5_masteries": [],
-    }
-
-    for key, value in defaults.items():
-        doc.setdefault(key, value)
-
-    return doc
-
-
-# --------------------------------------------------------------------
 # Existing routers
 # --------------------------------------------------------------------
 if valorant_router is not None:
@@ -234,10 +181,10 @@ def root():
 @app.get("/health")
 def health():
     try:
-        client.admin.command("ping")
-        return {"status": "healthy", "mongo": "connected"}
+        _db_ping()
+        return {"status": "healthy", "db": "connected"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"MongoDB error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 
 @app.get("/api/health")
@@ -245,10 +192,10 @@ def api_health():
     """Public health probe used by the frontend status indicator.
 
     Always returns 200 so the frontend can render a status pill rather than
-    hitting an error boundary; the `db` field reflects MongoDB reachability.
+    hitting an error boundary; the `db` field reflects Postgres reachability.
     """
     try:
-        client.admin.command("ping")
+        _db_ping()
         return {"status": "ok", "db": "connected"}
     except Exception as e:
         return {"status": "degraded", "db": "disconnected", "error": str(e)}
@@ -260,40 +207,63 @@ def api_health():
 @app.get("/api/league/health")
 def league_health():
     try:
-        client.admin.command("ping")
-        return {"ok": True, "message": "League API is running", "mongo": "connected"}
+        _db_ping()
+        return {"ok": True, "message": "League API is running", "db": "connected"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"MongoDB error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 
 @app.get("/api/league/team-players")
 def get_team_players(team: str = Query(..., min_length=1)):
+    """Return the League of Legends roster for a team name.
+
+    Match is case-insensitive on the team's `name` column. The team_players
+    join resolves the roster currently assigned to that team.
+    """
     team = team.strip()
-
     try:
-        docs = list(players_collection.find({"team_name": team}))
-
-        if not docs:
-            docs = list(
-                players_collection.find(
-                    {
-                        "team_name": {
-                            "$regex": f"^{team}$",
-                            "$options": "i",
-                        }
-                    }
-                )
+        with get_cursor() as cur:
+            cur.execute(
+                """
+                SELECT p.id, p.slug, p.display_name, p.riot_id, p.riot_puuid,
+                       p.game_name, p.tag_line, p.role, p.game,
+                       p.rating, p.active, p.stats, p.last_updated,
+                       t.name AS team_name, t.slug AS team_slug
+                  FROM players p
+                  JOIN team_players tp ON tp.player_id = p.id
+                  JOIN teams t         ON t.id = tp.team_id
+                 WHERE LOWER(t.name) = LOWER(%s)
+                   AND p.game = 'League of Legends'
+                 ORDER BY p.display_name
+                """,
+                (team,),
             )
-
-        players = [normalize_player_doc(doc) for doc in docs]
+            players = []
+            for row in cur.fetchall():
+                players.append({
+                    "_id":           str(row["id"]),
+                    "slug":          row["slug"],
+                    "display_name":  row["display_name"],
+                    "riot_id":       row["riot_id"],
+                    "puuid":         row["riot_puuid"],
+                    "game_name":     row["game_name"],
+                    "tag_line":      row["tag_line"],
+                    "role":          row["role"],
+                    "game":          row["game"],
+                    "rating":        row["rating"],
+                    "active":        row["active"],
+                    "stats":         row["stats"] or {},
+                    "team_name":     row["team_name"],
+                    "team_slug":     row["team_slug"],
+                    "updated_at_utc": row["last_updated"].isoformat() if row["last_updated"] else None,
+                })
 
         return {
-            "ok": True,
-            "team": team,
-            "count": len(players),
+            "ok":      True,
+            "team":    team,
+            "count":   len(players),
             "players": players,
         }
-
     except Exception as e:
         logger.exception("Failed to fetch team players")
         raise HTTPException(status_code=500, detail=str(e))

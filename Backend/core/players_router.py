@@ -1,15 +1,31 @@
 """API routes for players."""
 
-from fastapi import APIRouter, HTTPException, Query
-from typing import Any, Optional
 from collections import Counter
+from typing import Any, Optional
 
-from core.db import get_db
+from fastapi import APIRouter, HTTPException, Query
+
+from core.db import get_cursor
 
 router = APIRouter()
 
-# Collection name contains a space (legacy). Kept consistent with admin_router.
-_PMS = "player match stats"
+_SORT_COLUMNS = {
+    "rating": "p.rating",
+    "name": "p.display_name",
+}
+
+
+def _project_player(row: dict) -> dict:
+    return {
+        "slug": row["slug"] or "",
+        "name": row["display_name"],
+        "team_name": row.get("team_name") or "",
+        "team_slug": row.get("team_slug") or "",
+        "game": row["game"],
+        "role": row["role"] or "",
+        "stats": row["stats"] or {},
+        "rating": int(row["rating"] or 0),
+    }
 
 
 @router.get("/")
@@ -21,75 +37,118 @@ def list_players(
     order: str = Query("desc"),
     limit: int = Query(50, ge=1, le=200),
 ):
-    db = get_db()
-    if db is None:
-        raise HTTPException(503, "Database unavailable")
-    filt: dict[str, Any] = {}
+    sort_col = _SORT_COLUMNS.get(sort, "p.rating")
+    sort_dir = "DESC" if order.lower() == "desc" else "ASC"
+
+    sql = [
+        "SELECT p.slug, p.display_name, p.game, p.role, p.stats, p.rating,",
+        "       t.name AS team_name, t.slug AS team_slug",
+        "  FROM players p",
+        "  LEFT JOIN LATERAL (",
+        "    SELECT tp.team_id FROM team_players tp WHERE tp.player_id = p.id",
+        "    ORDER BY tp.joined_at LIMIT 1",
+        "  ) tp ON TRUE",
+        "  LEFT JOIN teams t ON t.id = tp.team_id",
+    ]
+    clauses: list[str] = []
+    params: list[Any] = []
     if game:
-        filt["game"] = game
+        clauses.append("p.game = %s")
+        params.append(game)
     if team:
-        filt["team_slug"] = team
+        clauses.append("t.slug = %s")
+        params.append(team)
     if role:
-        filt["role"] = role
-    sort_dir = -1 if order == "desc" else 1
-    docs = list(
-        db["ranked_players"]
-        .find(filt, {"_id": 0})
-        .sort(sort, sort_dir)
-        .limit(limit)
-    )
-    return docs
+        clauses.append("p.role = %s")
+        params.append(role)
+    if clauses:
+        sql.append("WHERE " + " AND ".join(clauses))
+    sql.append(f"ORDER BY {sort_col} {sort_dir} NULLS LAST LIMIT %s")
+    params.append(limit)
 
-
-def _clean(row: dict[str, Any]) -> dict[str, Any]:
-    row = dict(row)
-    for k, v in list(row.items()):
-        # ObjectId and datetime-ish types → str for JSON safety
-        if k == "_id" or k.endswith("Id"):
-            row[k] = str(v) if v is not None else None
-    return row
+    with get_cursor() as cur:
+        cur.execute(" ".join(sql), params)
+        return [_project_player(r) for r in cur.fetchall()]
 
 
 @router.get("/{slug}")
 def get_player(slug: str):
-    db = get_db()
-    if db is None:
-        raise HTTPException(503, "Database unavailable")
-    player = db["ranked_players"].find_one({"slug": slug}, {"_id": 0})
-    if not player:
-        raise HTTPException(404, f"Player '{slug}' not found")
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            SELECT p.id, p.slug, p.display_name, p.game, p.role, p.stats, p.rating,
+                   t.name AS team_name, t.slug AS team_slug
+              FROM players p
+              LEFT JOIN LATERAL (
+                SELECT tp.team_id FROM team_players tp WHERE tp.player_id = p.id
+                ORDER BY tp.joined_at LIMIT 1
+              ) tp ON TRUE
+              LEFT JOIN teams t ON t.id = tp.team_id
+             WHERE p.slug = %s
+             LIMIT 1
+            """,
+            (slug,),
+        )
+        player = cur.fetchone()
+        if not player:
+            raise HTTPException(404, f"Player '{slug}' not found")
 
-    # Try to find the admin-managed `players` doc for richer joins.
-    # Legacy `ranked_players` has `name` but no `_id` link to `players`.
-    admin_player = db["players"].find_one({"displayName": player["name"]})
-    player_oid = admin_player["_id"] if admin_player else None
+        cur.execute(
+            """
+            SELECT id, match_id, team_id, team_name, game, map_name,
+                   agent, champion, role, kills, deaths, assists, acs,
+                   first_kills, plants, defuses, cs, gold, damage,
+                   vision, wards, win
+              FROM player_match_stats
+             WHERE player_id = %s
+             ORDER BY id DESC
+             LIMIT 25
+            """,
+            (player["id"],),
+        )
+        stat_rows = cur.fetchall()
 
-    # Build match-stats query: prefer playerId link, fall back to riotId == name.
-    stats_filt: dict[str, Any]
-    if player_oid is not None:
-        stats_filt = {"playerId": player_oid}
-    else:
-        stats_filt = {"riotId": player["name"]}
+    recent_matches = []
+    for r in stat_rows:
+        cleaned = {
+            "_id": str(r["id"]),
+            "matchId": str(r["match_id"]),
+            "teamId": str(r["team_id"]) if r["team_id"] is not None else None,
+            "teamName": r["team_name"],
+            "game": r["game"],
+            "mapName": r["map_name"] or None,
+            "kills": r["kills"],
+            "deaths": r["deaths"],
+            "assists": r["assists"],
+            "win": bool(r["win"]),
+        }
+        if r["game"] == "Valorant":
+            cleaned.update({
+                "agent": r["agent"],
+                "acs": r["acs"],
+                "firstKills": r["first_kills"],
+                "plants": r["plants"],
+                "defuses": r["defuses"],
+            })
+        else:
+            cleaned.update({
+                "champion": r["champion"],
+                "role": r["role"],
+                "cs": r["cs"],
+                "gold": r["gold"],
+                "damage": r["damage"],
+                "vision": r["vision"],
+                "wards": r["wards"],
+            })
+        recent_matches.append(cleaned)
 
-    stat_rows = list(
-        db[_PMS]
-        .find(stats_filt)
-        .sort("_id", -1)
-        .limit(25)
-    )
+    freq_field = "agent" if player["game"] == "Valorant" else "champion"
+    freq = Counter(r[freq_field] for r in stat_rows if r.get(freq_field))
+    frequency = [{"name": name, "count": count} for name, count in freq.most_common()]
 
-    recent_matches = [_clean(r) for r in stat_rows]
-
-    # Frequency counts (agent for Valorant, champion for LoL).
-    freq_field = "agent" if player.get("game") == "Valorant" else "champion"
-    freq = Counter(r.get(freq_field) for r in stat_rows if r.get(freq_field))
-    frequency = [
-        {"name": name, "count": count}
-        for name, count in freq.most_common()
-    ]
-
+    projected = _project_player(player)
     return {
-        **player,
+        **projected,
         "recent_matches": recent_matches,
         "frequency": frequency,
         "frequency_field": freq_field,

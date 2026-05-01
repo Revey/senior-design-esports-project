@@ -14,17 +14,13 @@ import time
 from pathlib import Path
 from typing import Optional
 
-import certifi
 import requests as http_requests
 from fastapi import APIRouter, Cookie, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
-from pymongo import MongoClient
 
 from . import riot_api, rso_store, tracker_scraper
 from .config import (
-    MONGO_URI,
-    MONGO_DB,
     RSO_CLIENT_ID,
     RSO_CLIENT_SECRET,
     RSO_REDIRECT_URI,
@@ -43,9 +39,6 @@ _cache: dict = {}
 
 ROSTERS_DIR = Path(__file__).parent / "rosters"
 
-# MongoDB client (lazy-initialized)
-_mongo_client: Optional[MongoClient] = None
-
 # RSO OAuth constants
 _RSO_AUTHORIZE_URL = "https://auth.riotgames.com/authorize"
 _RSO_TOKEN_URL = "https://auth.riotgames.com/token"
@@ -56,16 +49,6 @@ _signer = URLSafeTimedSerializer(SESSION_SECRET)
 _SESSION_COOKIE = "rso_session"
 _STATE_COOKIE = "rso_state"
 _SESSION_MAX_AGE = 86400 * 30  # 30 days
-
-
-def _get_db():
-    """Return the MongoDB database, creating the client on first call."""
-    global _mongo_client
-    if not MONGO_URI:
-        return None
-    if _mongo_client is None:
-        _mongo_client = MongoClient(MONGO_URI, tls=True, tlsCAFile=certifi.where())
-    return _mongo_client[MONGO_DB]
 
 
 def _cached(key: str, ttl: int, fn):

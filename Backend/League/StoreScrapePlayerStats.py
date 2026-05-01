@@ -1,16 +1,17 @@
 import json
 import os
 import re
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Any
 
-import certifi
 from dotenv import load_dotenv
-from pymongo import MongoClient
-from pymongo.errors import PyMongoError
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from core.db import get_cursor  # noqa: E402
 
 from RiotAPI import (
     get_champion_masteries,
@@ -375,15 +376,35 @@ def build_player_stat_doc(
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
+def upsert_player_stats_pg(puuid: str, riot_id: str, payload: dict) -> str:
+    """Merge `payload` into players.stats (JSONB) for the given puuid/riot_id.
+
+    Returns: "updated", "not_found", or "error".
+    """
+    try:
+        with get_cursor(commit=True) as cur:
+            cur.execute(
+                """
+                UPDATE players
+                   SET stats = COALESCE(stats, '{}'::jsonb) || %s::jsonb,
+                       last_updated = NOW()
+                 WHERE riot_puuid = %s
+                    OR (riot_puuid IS NULL AND riot_id = %s)
+                 RETURNING id
+                """,
+                (json.dumps(payload, default=str), puuid, riot_id),
+            )
+            return "updated" if cur.fetchone() else "not_found"
+    except Exception as exc:
+        print(f"    [DB ERROR] {exc}")
+        return "error"
+
+
 def main():
     load_dotenv()
 
-    mongo_uri        = os.getenv("MONGO_URI")
-    mongo_db_name    = os.getenv("MONGO_DB",                "senior_design_esports")
-    target_coll_name = os.getenv("MONGO_TARGET_COLLECTION", "CLOL_player_stats")
-
-    if not mongo_uri:
-        raise ValueError("Missing MONGO_URI in .env")
+    if not os.getenv("DATABASE_URL"):
+        raise SystemExit("Missing DATABASE_URL in environment")
 
     # ── Load player data from JSON ────────────────────────────────────────────
     if not JSON_SOURCE_PATH.exists():
@@ -414,89 +435,90 @@ def main():
 
     print(f"Valid players: {len(valid_players)}  |  Skipped: {skipped}\n")
 
-    # ── MongoDB setup ─────────────────────────────────────────────────────────
-    client = MongoClient(mongo_uri, tls=True, tlsCAFile=certifi.where())
+    updated = 0
+    missing = 0
+    failed = 0
 
-    try:
-        db                = client[mongo_db_name]
-        target_collection = db[target_coll_name]
-        target_collection.create_index("riot_id", unique=True)
+    # ── Scrape all players ────────────────────────────────────────────────────
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--disable-blink-features=AutomationControlled"],
+        )
+        context = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1440, "height": 1100},
+        )
+        context.set_default_timeout(DEFAULT_TIMEOUT_MS)
+        page = context.new_page()
 
-        # ── Scrape all players ────────────────────────────────────────────────
-        with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
-                args=["--disable-blink-features=AutomationControlled"],
-            )
-            context = browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
-                viewport={"width": 1440, "height": 1100},
-            )
-            context.set_default_timeout(DEFAULT_TIMEOUT_MS)
-            page = context.new_page()
+        for team, player in valid_players:
+            riot_id      = player.get("riot_id")
+            display_name = player.get("display_name", "Unknown Player")
+            puuid        = player.get("puuid")
 
-            inserted_or_replaced = 0
+            print(f"  Scraping {display_name} ({riot_id}) ...")
 
-            for team, player in valid_players:
-                riot_id      = player.get("riot_id")
-                display_name = player.get("display_name", "Unknown Player")
-                puuid        = player.get("puuid")
+            # ── 1. OP.GG scrape (rank + role bars) ───────────────────────────
+            try:
+                scraped = scrape_player_page(page, riot_id)
+            except Exception as e:
+                print(f"    [OPGG ERROR] {e}")
+                scraped = {"scrape_status": "error", "source": "opgg", "error": str(e),
+                           "top_roles": [], "main_role": None}
 
-                print(f"  Scraping {display_name} ({riot_id}) ...")
+            print(f"    Roles: {[r['role'] for r in scraped.get('top_roles', [])] or 'none'}")
 
-                # ── 1. OP.GG scrape (rank + role bars) ───────────────────────
-                try:
-                    scraped = scrape_player_page(page, riot_id)
-                except Exception as e:
-                    print(f"    [OPGG ERROR] {e}")
-                    scraped = {"scrape_status": "error", "source": "opgg", "error": str(e),
-                               "top_roles": [], "main_role": None}
+            # ── 2. Mastery from Riot API ──────────────────────────────────────
+            masteries: list[dict] = []
+            mastery_result = get_champion_masteries(puuid, count=5)
 
-                print(f"    Roles: {[r['role'] for r in scraped.get('top_roles', [])] or 'none'}")
+            if isinstance(mastery_result, list):
+                masteries = mastery_result
+                print(f"    Masteries: {[m['champion'] for m in masteries]}")
+            elif mastery_result == MASTERY_RATE_LIMITED:
+                print("    [MASTERY] Rate limited — waiting 10 s before retry")
+                time.sleep(10)
+                retry = get_champion_masteries(puuid, count=5)
+                if isinstance(retry, list):
+                    masteries = retry
+            elif mastery_result == MASTERY_NOT_FOUND:
+                print("    [MASTERY] Not found (no mastery data for this player)")
+            else:
+                print(f"    [MASTERY] Unexpected result: {mastery_result}")
 
-                # ── 2. Mastery from Riot API ──────────────────────────────────
-                masteries: list[dict] = []
-                mastery_result = get_champion_masteries(puuid, count=5)
+            # ── 3. Merge scraped payload into players.stats ───────────────────
+            payload = {
+                **scraped,
+                "top_5_masteries": masteries,
+                "team_name":       team.get("team_name"),
+                "school":          team.get("school"),
+                "updated_at_utc":  datetime.now(timezone.utc).isoformat(),
+            }
 
-                if isinstance(mastery_result, list):
-                    masteries = mastery_result
-                    print(f"    Masteries: {[m['champion'] for m in masteries]}")
-                elif mastery_result == MASTERY_RATE_LIMITED:
-                    print("    [MASTERY] Rate limited — waiting 10 s before retry")
-                    time.sleep(10)
-                    retry = get_champion_masteries(puuid, count=5)
-                    if isinstance(retry, list):
-                        masteries = retry
-                elif mastery_result == MASTERY_NOT_FOUND:
-                    print("    [MASTERY] Not found (no mastery data for this player)")
-                else:
-                    print(f"    [MASTERY] Unexpected result: {mastery_result}")
+            result = upsert_player_stats_pg(puuid, riot_id, payload)
+            if result == "updated":
+                updated += 1
+                print(f"    Saved → scrape_status={scraped.get('scrape_status')}")
+            elif result == "not_found":
+                missing += 1
+                print("    No matching player row — run StorePlayer.py first.")
+            else:
+                failed += 1
 
-                # ── 3. Build & upsert document ────────────────────────────────
-                try:
-                    doc = build_player_stat_doc(team, player, scraped, masteries)
-                    target_collection.replace_one({"riot_id": riot_id}, doc, upsert=True)
-                    inserted_or_replaced += 1
-                    print(f"    Saved → scrape_status={scraped.get('scrape_status')}")
-                except Exception as e:
-                    print(f"    [DB ERROR] {e}")
+            time.sleep(REQUEST_DELAY_SECONDS)
 
-                time.sleep(REQUEST_DELAY_SECONDS)
+        browser.close()
 
-            browser.close()
-
-        print("\n── Done ──────────────────────────────────")
-        print(f"Inserted/Replaced : {inserted_or_replaced}")
-        print(f"Skipped           : {skipped}")
-
-    except PyMongoError as e:
-        print("MongoDB error:", e)
-    finally:
-        client.close()
+    print("\n── Done ──────────────────────────────────")
+    print(f"Updated:  {updated}")
+    print(f"Missing:  {missing}")
+    print(f"Failed:   {failed}")
+    print(f"Skipped:  {skipped}")
 
 
 if __name__ == "__main__":

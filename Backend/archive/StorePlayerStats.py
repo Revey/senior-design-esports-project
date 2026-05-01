@@ -2,14 +2,13 @@
 StorePlayerStats.py
 -------------------
 For each player in necc_val_teams_puuids.json, scrapes tracker.gg for
-Valorant stats (KD, ACS, HS%, ADR) and upserts the results to the
-MongoDB VAL_player_stats collection.
+Valorant stats (KD, ACS, HS%, ADR) and merges the aggregate stats into
+`players.stats` (JSONB) in Postgres, keyed on riot_puuid.
 
 Mirrors the structure of League/StoreScrapePlayerStats.py.
 
-Requirements: pip install pymongo python-dotenv certifi requests beautifulsoup4
 Run from the Backend/ directory:
-    python valorant/StorePlayerStats.py
+    python archive/StorePlayerStats.py
 """
 
 import json
@@ -20,12 +19,12 @@ import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
-import certifi
 import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-from pymongo import MongoClient
-from pymongo.errors import PyMongoError
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from core.db import get_cursor  # noqa: E402
 
 load_dotenv()
 
@@ -33,10 +32,6 @@ load_dotenv()
 
 SCRIPT_DIR       = Path(__file__).resolve().parent
 JSON_SOURCE_PATH = SCRIPT_DIR / "necc_val_teams_puuids.json"
-
-MONGO_URI              = os.getenv("MONGO_URI", "")
-MONGO_DB               = os.getenv("MONGO_DB", "senior_design_esports")
-VAL_STATS_COLLECTION   = os.getenv("VAL_STATS_COLLECTION", "VAL_player_stats")
 
 RIOT_API_KEY        = os.getenv("RIOT_API_KEY", "")
 RIOT_ACCOUNT_REGION = os.getenv("RIOT_ACCOUNT_REGION", "americas")
@@ -185,24 +180,42 @@ def riot_aggregate_stats(puuid: str) -> dict:
     }
 
 
-# ── MongoDB ───────────────────────────────────────────────────────────────────
+# ── Postgres upsert ───────────────────────────────────────────────────────────
 
-def get_mongo_collection():
-    if not MONGO_URI:
-        raise ValueError("Missing MONGO_URI in .env")
-    client = MongoClient(MONGO_URI, tls=True, tlsCAFile=certifi.where())
-    db     = client[MONGO_DB]
-    coll   = db[VAL_STATS_COLLECTION]
-    coll.create_index("riot_id", unique=True)
-    return client, coll
+def upsert_player_stats(puuid: str, riot_id: str, payload: dict) -> str:
+    """Merge `payload` into players.stats (JSONB) for the given puuid.
+
+    Returns one of: "updated", "not_found", "error".
+    """
+    try:
+        with get_cursor(commit=True) as cur:
+            cur.execute(
+                """
+                UPDATE players
+                   SET stats = COALESCE(stats, '{}'::jsonb) || %s::jsonb,
+                       last_updated = NOW()
+                 WHERE riot_puuid = %s
+                    OR (riot_puuid IS NULL AND riot_id = %s)
+                 RETURNING id
+                """,
+                (json.dumps(payload), puuid, riot_id),
+            )
+            row = cur.fetchone()
+            return "updated" if row else "not_found"
+    except Exception as exc:
+        print(f"  Postgres upsert failed: {exc}")
+        return "error"
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     print("=" * 72)
-    print("NECC Valorant Player Stats Scraper → MongoDB")
+    print("NECC Valorant Player Stats Scraper → Postgres (players.stats)")
     print("=" * 72)
+
+    if not os.getenv("DATABASE_URL"):
+        raise SystemExit("Missing DATABASE_URL in environment")
 
     if not JSON_SOURCE_PATH.exists():
         print(f"ERROR: {JSON_SOURCE_PATH} not found. Run BuildNecc_val_teams_puuids.py first.")
@@ -211,7 +224,6 @@ def main():
     with JSON_SOURCE_PATH.open("r", encoding="utf-8") as f:
         teams = json.load(f)
 
-    # Flatten all players with puuid_status == "found"
     all_players = [
         p | {"school": t["school"], "logo_url": t.get("logo_url")}
         for t in teams
@@ -226,62 +238,47 @@ def main():
         print("No players with resolved PUUIDs. Run BuildNecc_val_teams_puuids.py first.")
         return
 
-    mongo_client, collection = get_mongo_collection()
-
-    ok_count   = 0
+    ok_count = 0
+    missing_count = 0
     fail_count = 0
 
-    try:
-        for i, player in enumerate(all_players, 1):
-            game_name    = player.get("game_name", "")
-            tag_line     = player.get("tag_line", "")
-            puuid        = player.get("puuid", "")
-            riot_id      = player.get("riot_id") or f"{game_name}#{tag_line}"
-            display_name = player.get("display_name", "")
-            team_name    = player.get("team_name", "")
-            school       = player.get("school", "")
-            role         = player.get("role")
+    for i, player in enumerate(all_players, 1):
+        game_name    = player.get("game_name", "")
+        tag_line     = player.get("tag_line", "")
+        puuid        = player.get("puuid", "")
+        riot_id      = player.get("riot_id") or f"{game_name}#{tag_line}"
+        team_name    = player.get("team_name", "")
 
-            print(f"\n[{i}/{total}] {riot_id}  ({team_name})")
+        print(f"\n[{i}/{total}] {riot_id}  ({team_name})")
 
-            # tracker.gg scrape
-            print(f"  Scraping tracker.gg …", end=" ", flush=True)
-            tracker_stats = scrape_tracker(game_name, tag_line)
-            print("OK" if tracker_stats else "no data")
+        print("  Scraping tracker.gg …", end=" ", flush=True)
+        tracker_stats = scrape_tracker(game_name, tag_line)
+        print("OK" if tracker_stats else "no data")
 
-            # Riot API aggregate stats
-            print(f"  Riot API stats …", end=" ", flush=True)
-            riot_stats = riot_aggregate_stats(puuid)
-            print("OK" if riot_stats else "no data")
+        print("  Riot API stats …", end=" ", flush=True)
+        riot_stats = riot_aggregate_stats(puuid)
+        print("OK" if riot_stats else "no data")
 
-            scrape_status = "OK" if (tracker_stats or riot_stats) else "FAILED"
+        scrape_status = "OK" if (tracker_stats or riot_stats) else "FAILED"
 
-            doc = {
-                "riot_id":       riot_id,
-                "team_name":     team_name,
-                "school":        school,
-                "display_name":  display_name,
-                "role":          role,
-                "puuid":         puuid,
-                "tracker_stats": tracker_stats,
-                "riot_stats":    riot_stats,
-                "scrape_status": scrape_status,
-                "updated_at_utc": datetime.now(timezone.utc).isoformat(),
-            }
+        payload = {
+            "tracker_stats": tracker_stats,
+            "riot_stats":    riot_stats,
+            "scrape_status": scrape_status,
+            "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+        }
 
-            try:
-                collection.replace_one({"riot_id": riot_id}, doc, upsert=True)
-                ok_count += 1
-            except PyMongoError as e:
-                print(f"  MongoDB upsert failed: {e}")
-                fail_count += 1
-
-    finally:
-        mongo_client.close()
+        result = upsert_player_stats(puuid, riot_id, payload)
+        if result == "updated":
+            ok_count += 1
+        elif result == "not_found":
+            missing_count += 1
+            print("  No matching player row — skipped (run StorePlayer.py first).")
+        else:
+            fail_count += 1
 
     print(f"\n{'='*72}")
-    print(f"Done. Stored: {ok_count}  Failed: {fail_count}")
-    print(f"Collection: {MONGO_DB}.{VAL_STATS_COLLECTION}")
+    print(f"Done. Updated: {ok_count}  Missing: {missing_count}  Failed: {fail_count}")
 
 
 if __name__ == "__main__":
