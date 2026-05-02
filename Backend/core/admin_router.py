@@ -1412,3 +1412,67 @@ def delete_match(match_id: str):
             raise
 
     return {"ok": True, "deletedStatRows": deleted_pms}
+
+
+# ============================================================================
+# Phase 3f.3 — Admin dashboard stats
+# Counts of core entities + 5 most recent matches.
+# ============================================================================
+
+@router.get("/stats", dependencies=[Depends(require_admin)])
+def admin_stats():
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT "
+            "  (SELECT COUNT(*) FROM matches)         AS matches, "
+            "  (SELECT COUNT(*) FROM players)         AS players, "
+            "  (SELECT COUNT(*) FROM teams)           AS teams, "
+            "  (SELECT COUNT(*) FROM schools)         AS schools, "
+            "  (SELECT COUNT(*) FROM organizations)   AS organizations, "
+            "  (SELECT COUNT(*) FROM conferences)     AS conferences"
+        )
+        counts = cur.fetchone()
+
+        cur.execute(
+            "SELECT m.id, m.match_date, m.game, m.format, "
+            "       m.team1_id, m.team2_id, m.team1_score, m.team2_score, "
+            "       m.league_name, "
+            "       t1.name AS team1_name, t2.name AS team2_name "
+            "FROM matches m "
+            "LEFT JOIN teams t1 ON t1.id = m.team1_id "
+            "LEFT JOIN teams t2 ON t2.id = m.team2_id "
+            "ORDER BY m.match_date DESC, m.id DESC LIMIT 5"
+        )
+        recent_rows = cur.fetchall()
+
+    recent = []
+    for r in recent_rows:
+        t1, t2 = r["team1_score"] or 0, r["team2_score"] or 0
+        winner = (str(r["team1_id"]) if t1 > t2
+                  else str(r["team2_id"]) if t2 > t1 else None)
+        recent.append({
+            "_id":          str(r["id"]),
+            "game":         _label_game(r["game"]),
+            "team1Id":      str(r["team1_id"]),
+            "team2Id":      str(r["team2_id"]),
+            "team1Name":    r.get("team1_name") or "",
+            "team2Name":    r.get("team2_name") or "",
+            "team1Score":   r.get("team1_score"),
+            "team2Score":   r.get("team2_score"),
+            "winnerTeamId": winner,
+            "format":       r.get("format"),
+            "date":         r["match_date"].isoformat() if r.get("match_date") else None,
+            "leagueName":   r.get("league_name") or "",
+        })
+
+    return {
+        "counts": {
+            "matches":       counts["matches"],
+            "players":       counts["players"],
+            "teams":         counts["teams"],
+            "schools":       counts["schools"],
+            "organizations": counts["organizations"],
+            "conferences":   counts["conferences"],
+        },
+        "recent_matches": recent,
+    }
