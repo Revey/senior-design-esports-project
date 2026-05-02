@@ -7,11 +7,12 @@ Run with:
 Phase 2 of postgres-migration-v2 — see migrations/postgres-v2/phase-2-SPEC.md.
 
 Status: data layer is now Postgres (psycopg2 ThreadedConnectionPool via
-core/db.py). All 7 business routers (leagues, teams, players, matches,
+core/db.py). The 6 remaining business routers (teams, players, matches,
 tournaments, admin, valorant) are intentionally NOT registered yet — they
-still import pymongo, which is no longer in requirements.txt. The
-_try_router() helper below tolerates that ImportError on the basis that
-e.name == "pymongo" (Option Z) and skips registration with an INFO log.
+still import pymongo or use the removed core.db.get_db helper, so the
+_try_router() guard below skips them via Option Z. The leagues router
+was DELETED in Phase 3a (the leagues collection has no Postgres
+equivalent — replaced by the org/conference hierarchy).
 Any other ImportError fails the app boot — that's a real bug, not Option Z.
 Phase 3 ports each router and the corresponding _try_router() line is
 removed at that time.
@@ -136,12 +137,13 @@ def _try_router(module_path: str, name: str) -> Any:
 
 
 valorant_router    = _try_router("valorant.routes",         "valorant_router")
-leagues_router     = _try_router("core.leagues_router",     "leagues_router")
 tournaments_router = _try_router("core.tournaments_router", "tournaments_router")
 teams_router       = _try_router("core.teams_router",       "teams_router")
 players_router     = _try_router("core.players_router",     "players_router")
 admin_router       = _try_router("core.admin_router",       "admin_router")
 matches_router     = _try_router("core.matches_router",     "matches_router")
+# (Phase 3a deleted the leagues route — the Mongo `leagues` collection has no
+# Postgres equivalent; replaced by organizations/seasons/conferences hierarchy.)
 
 
 # --------------------------------------------------------------------
@@ -223,9 +225,6 @@ else:
 # ============================================================================
 if valorant_router is not None:
     app.include_router(valorant_router, prefix="/api/valorant")
-
-if leagues_router is not None:
-    app.include_router(leagues_router, prefix="/api/leagues")
 
 if tournaments_router is not None:
     app.include_router(tournaments_router, prefix="/api/tournaments")
