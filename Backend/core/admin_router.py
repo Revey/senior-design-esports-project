@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import logging
 import os
 import re
@@ -331,6 +332,65 @@ class MembershipCreate(BaseModel):
 
 class MembershipUpdate(BaseModel):
     active: bool
+
+
+# Match request models (Phase 3f.2)
+class ValPlayerStat(BaseModel):
+    playerId: str
+    agent: str
+    kills: int
+    deaths: int
+    assists: int
+    acs: int
+    firstKills: int = 0
+    plants: int = 0
+    defuses: int = 0
+
+
+class ValMap(BaseModel):
+    mapName: str
+    team1Score: int       # round score (e.g. 13)
+    team2Score: int       # round score
+    team1Players: list[ValPlayerStat]
+    team2Players: list[ValPlayerStat]
+
+
+class LolPlayerStat(BaseModel):
+    playerId: str
+    champion: str
+    role: str
+    kills: int
+    deaths: int
+    assists: int
+    cs: int
+    gold: int
+    damage: int
+    vision: int = 0
+    wards: int = 0
+
+
+class MatchCreate(BaseModel):
+    game: Literal["Valorant", "League of Legends"]
+    team1Id: str
+    team2Id: str
+    date: Optional[str] = None
+    format: Literal["BO1", "BO3", "BO5"] = "BO1"
+    # Optional new-hierarchy refs:
+    orgId: Optional[str] = None
+    seasonId: Optional[str] = None
+    conferenceId: Optional[str] = None
+    # Valorant payload:
+    maps: list[ValMap] = Field(default_factory=list)
+    # LoL payload (series totals + per-player rows):
+    team1Score: Optional[int] = None
+    team2Score: Optional[int] = None
+    lolTeam1Players: list[LolPlayerStat] = Field(default_factory=list)
+    lolTeam2Players: list[LolPlayerStat] = Field(default_factory=list)
+
+
+class MatchScorePatch(BaseModel):
+    team1Score: int
+    team2Score: int
 
 
 # ---------- auth routes ----------
@@ -1060,3 +1120,295 @@ def leagues_tree():
             "conferences": by_org_confs.get(oid, []),
         })
     return out
+
+
+# ============================================================================
+# Phase 3f.2 — Match CRUD (POST/PATCH/DELETE /api/admin/matches)
+#
+# Multi-statement transactions throughout. Uses get_conn() + explicit
+# conn.cursor() per the CONSTITUTION's "Multi-statement transaction pattern"
+# (NEVER nested get_cursor inside get_conn).
+#
+# W/L delta logic:
+#   - On insert: apply +1 win/loss + map_wins/map_losses to both teams.
+#   - On score-patch: reverse old delta, apply new delta.
+#   - On delete: reverse delta, cascade pms+detail rows via FK.
+#
+# Per-map round scores in Val (m.team1Score / m.team2Score) are NOT persisted
+# to the schema (Phase 1 has no per-map score columns; the gap was documented
+# in Phase 3e SPEC). The aggregate match-level score is the count of maps
+# each team won (e.g. 2-1 in a bo3). Per-map round scores are dropped.
+# ============================================================================
+
+def _resolve_hierarchy(cur, org_id_str: Optional[str], season_id_str: Optional[str],
+                       conf_id_str: Optional[str]) -> tuple[Optional[int], Optional[int],
+                                                              Optional[int], Optional[str], Optional[str]]:
+    """Validate and return (org_id, season_id, conf_id, league_name_synth, _).
+
+    Returns the IDs (int or None) and a synthesized league_name string from
+    `{abbrev} {tier?} {conference}` for legacy display fallback.
+    """
+    org_id = _int_id(org_id_str, "orgId") if org_id_str else None
+    season_id = _int_id(season_id_str, "seasonId") if season_id_str else None
+    conf_id = _int_id(conf_id_str, "conferenceId") if conf_id_str else None
+
+    org_abbr: Optional[str] = None
+    if org_id is not None:
+        cur.execute("SELECT abbreviation FROM organizations WHERE id = %s", (org_id,))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(404, "Organization not found")
+        org_abbr = row["abbreviation"]
+    if season_id is not None:
+        cur.execute("SELECT org_id FROM seasons WHERE id = %s", (season_id,))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(404, "Season not found")
+        if org_id is not None and row["org_id"] != org_id:
+            raise HTTPException(400, "Season does not belong to the selected organization")
+    league_name: Optional[str] = None
+    if conf_id is not None:
+        cur.execute("SELECT org_id, name, tier FROM conferences WHERE id = %s", (conf_id,))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(404, "Conference not found")
+        if org_id is not None and row["org_id"] != org_id:
+            raise HTTPException(400, "Conference does not belong to the selected organization")
+        if org_abbr:
+            tier = row["tier"]
+            league_name = f"{org_abbr} {(tier + ' ') if tier else ''}{row['name']}".strip()
+    return org_id, season_id, conf_id, league_name, None
+
+
+def _apply_record_delta(cur, team_id: int, won: bool, map_wins: int, map_losses: int) -> None:
+    cur.execute(
+        "UPDATE teams SET "
+        "  wins = wins + %s, losses = losses + %s, "
+        "  map_wins = map_wins + %s, map_losses = map_losses + %s "
+        "WHERE id = %s",
+        (1 if won else 0, 0 if won else 1, map_wins, map_losses, team_id),
+    )
+
+
+def _reverse_record_delta(cur, team_id: int, won: bool, map_wins: int, map_losses: int) -> None:
+    cur.execute(
+        "UPDATE teams SET "
+        "  wins = wins - %s, losses = losses - %s, "
+        "  map_wins = map_wins - %s, map_losses = map_losses - %s "
+        "WHERE id = %s",
+        (1 if won else 0, 0 if won else 1, map_wins, map_losses, team_id),
+    )
+
+
+@router.post("/matches", dependencies=[Depends(require_admin)])
+def create_match(req: MatchCreate):
+    t1_id = _int_id(req.team1Id, "team1Id")
+    t2_id = _int_id(req.team2Id, "team2Id")
+    if t1_id == t2_id:
+        raise HTTPException(400, "team1 and team2 must differ")
+    db_game = _db_game(req.game)
+    db_format = req.format.lower()  # frontend BO1/BO3/BO5 → schema bo1/bo3/bo5
+
+    match_date = req.date or datetime.now(timezone.utc).isoformat()
+
+    with get_conn() as conn:
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # Validate teams + game match.
+                cur.execute("SELECT id, name, game FROM teams WHERE id IN (%s, %s)", (t1_id, t2_id))
+                team_rows = {r["id"]: r for r in cur.fetchall()}
+                if t1_id not in team_rows or t2_id not in team_rows:
+                    raise HTTPException(404, "Team not found")
+                if team_rows[t1_id]["game"] != db_game or team_rows[t2_id]["game"] != db_game:
+                    raise HTTPException(400, "Team game mismatch")
+                t1_name = team_rows[t1_id]["name"]
+                t2_name = team_rows[t2_id]["name"]
+
+                # Hierarchy refs.
+                org_id, season_id, conf_id, league_name, _ = _resolve_hierarchy(
+                    cur, req.orgId, req.seasonId, req.conferenceId,
+                )
+
+                # Reversed-team duplicate pre-check (CONSTITUTION mandate).
+                cur.execute(
+                    "SELECT 1 FROM matches "
+                    "WHERE ((team1_id = %s AND team2_id = %s) OR (team1_id = %s AND team2_id = %s)) "
+                    "  AND match_date = %s AND game = %s",
+                    (t1_id, t2_id, t2_id, t1_id, match_date, db_game),
+                )
+                if cur.fetchone():
+                    raise HTTPException(409, "A match between these teams on this date already exists")
+
+                # Compute aggregate match scores.
+                if req.game == "Valorant":
+                    if not req.maps:
+                        raise HTTPException(400, "At least one map required for Valorant")
+                    t1_maps = sum(1 for m in req.maps if m.team1Score > m.team2Score)
+                    t2_maps = sum(1 for m in req.maps if m.team2Score > m.team1Score)
+                    match_t1_score, match_t2_score = t1_maps, t2_maps
+                else:
+                    if req.team1Score is None or req.team2Score is None:
+                        raise HTTPException(400, "team1Score/team2Score required for LoL")
+                    match_t1_score, match_t2_score = req.team1Score, req.team2Score
+
+                # Insert match.
+                try:
+                    cur.execute(
+                        "INSERT INTO matches "
+                        "(team1_id, team2_id, team1_score, team2_score, format, match_date, game, "
+                        " source, org_id, season_id, conference_id, league_name) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, 'admin', %s, %s, %s, %s) RETURNING *",
+                        (t1_id, t2_id, match_t1_score, match_t2_score, db_format, match_date,
+                         db_game, org_id, season_id, conf_id, league_name),
+                    )
+                    match_row = cur.fetchone()
+                except UniqueViolation:
+                    raise HTTPException(409, "A match between these teams on this date already exists")
+                match_id = match_row["id"]
+
+                # Insert per-player stats.
+                if req.game == "Valorant":
+                    for m in req.maps:
+                        for side, players in (("team1", m.team1Players), ("team2", m.team2Players)):
+                            team_id = t1_id if side == "team1" else t2_id
+                            team_name = t1_name if side == "team1" else t2_name
+                            for p in players:
+                                player_id = _int_id(p.playerId, "playerId")
+                                cur.execute(
+                                    "INSERT INTO player_match_stats "
+                                    "(match_id, player_id, team_id, team_name, game, map_name) "
+                                    "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+                                    (match_id, player_id, team_id, team_name, db_game, m.mapName),
+                                )
+                                pms_id = cur.fetchone()["id"]
+                                extras = {"firstKills": p.firstKills, "plants": p.plants, "defuses": p.defuses}
+                                cur.execute(
+                                    "INSERT INTO pms_valorant_details "
+                                    "(pms_id, kills, deaths, assists, agent, acs, details) "
+                                    "VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)",
+                                    (pms_id, p.kills, p.deaths, p.assists, p.agent, p.acs,
+                                     json.dumps(extras)),
+                                )
+                else:  # LoL
+                    for side, players in (("team1", req.lolTeam1Players), ("team2", req.lolTeam2Players)):
+                        team_id = t1_id if side == "team1" else t2_id
+                        team_name = t1_name if side == "team1" else t2_name
+                        for p in players:
+                            player_id = _int_id(p.playerId, "playerId")
+                            cur.execute(
+                                "INSERT INTO player_match_stats "
+                                "(match_id, player_id, team_id, team_name, game, map_name) "
+                                "VALUES (%s, %s, %s, %s, %s, '') RETURNING id",
+                                (match_id, player_id, team_id, team_name, db_game),
+                            )
+                            pms_id = cur.fetchone()["id"]
+                            extras = {"damage": p.damage, "vision": p.vision, "wards": p.wards}
+                            cur.execute(
+                                "INSERT INTO pms_lol_details "
+                                "(pms_id, kills, deaths, assists, champion, lane, cs, gold, details) "
+                                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)",
+                                (pms_id, p.kills, p.deaths, p.assists, p.champion, p.role,
+                                 p.cs, p.gold, json.dumps(extras)),
+                            )
+
+                # Apply W/L delta.
+                if match_t1_score == match_t2_score:
+                    winner_id: Optional[int] = None
+                else:
+                    winner_id = t1_id if match_t1_score > match_t2_score else t2_id
+                if winner_id is not None:
+                    _apply_record_delta(cur, t1_id, winner_id == t1_id, match_t1_score, match_t2_score)
+                    _apply_record_delta(cur, t2_id, winner_id == t2_id, match_t2_score, match_t1_score)
+            conn.commit()
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception:
+            conn.rollback()
+            raise
+
+    return {
+        "ok":           True,
+        "matchId":      str(match_id),
+        "winnerTeamId": str(winner_id) if winner_id is not None else None,
+    }
+
+
+@router.patch("/matches/{match_id}", dependencies=[Depends(require_admin)])
+def update_match(match_id: str, req: MatchScorePatch):
+    """Score-only patch: adjust team1/team2 scores and reverse+reapply W/L delta.
+
+    Per-map / per-player edits require delete + re-create (frontend convention
+    matches Mongo behavior).
+    """
+    mid = _int_id(match_id, "match_id")
+    if req.team1Score == req.team2Score:
+        raise HTTPException(400, "Scores cannot be tied")
+
+    with get_conn() as conn:
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM matches WHERE id = %s", (mid,))
+                match = cur.fetchone()
+                if not match:
+                    raise HTTPException(404, "Match not found")
+
+                t1_id, t2_id = match["team1_id"], match["team2_id"]
+                old_t1, old_t2 = match["team1_score"] or 0, match["team2_score"] or 0
+                old_winner = (t1_id if old_t1 > old_t2 else t2_id if old_t2 > old_t1 else None)
+
+                # Reverse old delta (if there was a winner).
+                if old_winner is not None:
+                    _reverse_record_delta(cur, t1_id, old_winner == t1_id, old_t1, old_t2)
+                    _reverse_record_delta(cur, t2_id, old_winner == t2_id, old_t2, old_t1)
+
+                new_winner = t1_id if req.team1Score > req.team2Score else t2_id
+                cur.execute(
+                    "UPDATE matches SET team1_score = %s, team2_score = %s WHERE id = %s",
+                    (req.team1Score, req.team2Score, mid),
+                )
+                _apply_record_delta(cur, t1_id, new_winner == t1_id, req.team1Score, req.team2Score)
+                _apply_record_delta(cur, t2_id, new_winner == t2_id, req.team2Score, req.team1Score)
+            conn.commit()
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception:
+            conn.rollback()
+            raise
+
+    return {"ok": True, "matchId": str(mid), "winnerTeamId": str(new_winner)}
+
+
+@router.delete("/matches/{match_id}", dependencies=[Depends(require_admin)])
+def delete_match(match_id: str):
+    """Hard-delete: reverse W/L delta, then DELETE match.
+    pms + per-game detail rows cascade via FK ON DELETE CASCADE.
+    """
+    mid = _int_id(match_id, "match_id")
+
+    with get_conn() as conn:
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM matches WHERE id = %s", (mid,))
+                match = cur.fetchone()
+                if not match:
+                    raise HTTPException(404, "Match not found")
+                t1_id, t2_id = match["team1_id"], match["team2_id"]
+                t1, t2 = match["team1_score"] or 0, match["team2_score"] or 0
+                winner = (t1_id if t1 > t2 else t2_id if t2 > t1 else None)
+                if winner is not None:
+                    _reverse_record_delta(cur, t1_id, winner == t1_id, t1, t2)
+                    _reverse_record_delta(cur, t2_id, winner == t2_id, t2, t1)
+                cur.execute(
+                    "SELECT COUNT(*) AS n FROM player_match_stats WHERE match_id = %s",
+                    (mid,),
+                )
+                deleted_pms = cur.fetchone()["n"]
+                cur.execute("DELETE FROM matches WHERE id = %s", (mid,))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    return {"ok": True, "deletedStatRows": deleted_pms}
