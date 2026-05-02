@@ -52,6 +52,11 @@ services:
       FRONTEND_ORIGIN: http://localhost:3000
       ALLOWED_ORIGINS: http://localhost:3000,http://localhost:3001
       RATE_LIMIT_DEFAULT: 60/minute
+      # Admin auth (Phase 3f.1) — single-shared-password model. Real prod values
+      # come from DO secrets, NOT committed. These dev defaults are for local
+      # docker compose only.
+      ADMIN_PASSWORD: admin
+      ADMIN_SECRET: dev-insecure-secret
       # Put real secrets / Riot keys in .env (gitignored) — compose picks them up.
     env_file:
       - path: ./Backend/.env

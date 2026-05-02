@@ -1,34 +1,55 @@
-"""Admin router: password-gated endpoints for manual match data entry.
+"""Admin router (Postgres-backed; Phase 3f.1 of postgres-migration-v2).
 
 Auth model:
-- Single shared admin password (env: ADMIN_PASSWORD).
-- POST /api/admin/login exchanges password for a short-lived HMAC token.
-- All other /api/admin/* endpoints require Authorization: Bearer <token>.
+  - Single shared admin password (env: ADMIN_PASSWORD).
+  - POST /api/admin/login exchanges password for a short-lived HMAC token.
+  - All other /api/admin/* endpoints require Authorization: Bearer <token>.
+
+Phase 3f.1 covers: auth + schools + teams + players + orgs + seasons +
+conferences + memberships + leagues-tree.
+
+Out of this slice (added later):
+  - /api/admin/matches CRUD (POST/PATCH/DELETE) — Phase 3f.2 (multi-statement
+    transactions with W/L delta logic).
+  - /api/admin/stats (dashboard) — Phase 3f.3.
+  - The legacy /api/admin/leagues endpoints — deleted entirely in Phase 3f.3
+    (no Postgres equivalent, parallel to Phase 3a).
+
+Wire contract (Path A): preserve the Mongo-era camelCase shape so the existing
+admin frontend keeps working. `_id` is the numeric string of the row's id.
+Aliases: teamName ← name, mapWins ← map_wins, displayName ← display_name, etc.
 """
 
 from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import os
 import re
 import time
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
-from bson import ObjectId
-from bson.errors import InvalidId
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from pymongo.errors import DuplicateKeyError
 from pydantic import BaseModel, Field
+from psycopg2.errors import UniqueViolation
+from psycopg2.extras import RealDictCursor
 
-from core.db import get_db
+from core.db import get_conn, get_cursor
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", ADMIN_PASSWORD or "dev-insecure-secret")
 TOKEN_TTL_SECONDS = 60 * 60 * 12  # 12h
+
+_GAME_LABEL_TO_DB = {"Valorant": "valorant", "League of Legends": "lol"}
+_GAME_DB_TO_LABEL = {v: k for k, v in _GAME_LABEL_TO_DB.items()}
+
+_SEMESTER_LABEL_TO_DB = {"Fall": "fall", "Spring": "spring", "Summer": "summer"}
+_SEMESTER_DB_TO_LABEL = {v: k for k, v in _SEMESTER_LABEL_TO_DB.items()}
 
 
 # ---------- auth helpers ----------
@@ -61,7 +82,7 @@ def require_admin(authorization: Optional[str] = Header(None)) -> None:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 
-# ---------- utilities ----------
+# ---------- shared utilities ----------
 
 def _slugify(s: str) -> str:
     s = s.lower().strip()
@@ -69,100 +90,171 @@ def _slugify(s: str) -> str:
     return s.strip("-")
 
 
-def _oid(s: str) -> ObjectId:
+def _int_id(s: str, label: str = "id") -> int:
     try:
-        return ObjectId(s)
-    except InvalidId:
-        raise HTTPException(status_code=400, detail=f"Invalid id: {s}")
+        return int(s)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail=f"Invalid {label}: {s!r}")
 
 
-def _doc(d: dict[str, Any]) -> dict[str, Any]:
-    d = dict(d)
-    if "_id" in d:
-        d["_id"] = str(d["_id"])
-    for k, v in list(d.items()):
-        if isinstance(v, ObjectId):
-            d[k] = str(v)
-        elif isinstance(v, list):
-            d[k] = [str(x) if isinstance(x, ObjectId) else x for x in v]
-    return d
+def _label_game(db_value: Optional[str]) -> str:
+    if db_value is None:
+        return ""
+    return _GAME_DB_TO_LABEL.get(db_value, db_value)
 
 
-def _db():
-    db = get_db()
-    if db is None:
-        raise HTTPException(status_code=500, detail="Database not configured")
-    return db
+def _db_game(label: Optional[str]) -> Optional[str]:
+    if label is None:
+        return None
+    if label in _GAME_LABEL_TO_DB:
+        return _GAME_LABEL_TO_DB[label]
+    return label.lower()
 
 
-def _ensure_match_index():
-    """Idempotent: create a unique index to prevent duplicate match entries."""
-    try:
-        db = get_db()
-        if db is not None:
-            db["matches"].create_index(
-                [("team1Id", 1), ("team2Id", 1), ("date", 1), ("game", 1)],
-                unique=True,
-                name="dup_match_guard",
-                background=True,
-            )
-    except Exception:
-        pass  # non-fatal — guard is advisory
+def _label_semester(db_value: Optional[str]) -> str:
+    if db_value is None:
+        return ""
+    return _SEMESTER_DB_TO_LABEL.get(db_value, db_value)
 
 
-def _fix_matchid_index():
+def _db_semester(label: str) -> str:
+    if label in _SEMESTER_LABEL_TO_DB:
+        return _SEMESTER_LABEL_TO_DB[label]
+    return label.lower()
+
+
+def _year_string_to_int(year_str: str) -> int:
+    """'2025-2026' + Fall -> 2025; '2025-2026' + Spring -> 2026.
+    Caller picks which year to return based on semester. This helper just
+    parses the four-digit string; semester picking is in _season_create_year.
     """
-    The matchId field is only present on Riot-ingested matches, not admin matches.
-    A non-sparse unique index on matchId causes DuplicateKeyError for every second
-    admin match (all indexed as {matchId: null}).  Drop and recreate as sparse so
-    only documents that actually have a matchId are included in the uniqueness check.
-    """
-    try:
-        db = get_db()
-        if db is None:
-            return
-        try:
-            db["matches"].drop_index("matchId_1")
-        except Exception:
-            pass
-        db["matches"].create_index("matchId", unique=True, sparse=True, name="matchId_1")
-    except Exception:
-        pass
+    if not re.match(r"^\d{4}-\d{4}$", year_str):
+        raise HTTPException(status_code=400, detail="year must be like 2025-2026")
+    return int(year_str.split("-")[0])
 
 
-def _ensure_hierarchy_indexes():
-    """Indexes for orgs/seasons/conferences/memberships. Idempotent."""
-    try:
-        db = get_db()
-        if db is None:
-            return
-        db["organizations"].create_index("slug", unique=True, background=True)
-        db["seasons"].create_index(
-            [("orgId", 1), ("year", 1), ("semester", 1)],
-            unique=True, name="uniq_season", background=True,
-        )
-        db["conferences"].create_index(
-            [("orgId", 1), ("slug", 1)],
-            unique=True, name="uniq_conf_slug", background=True,
-        )
-        db["team_memberships"].create_index(
-            [("teamId", 1), ("conferenceId", 1), ("seasonId", 1)],
-            unique=True, name="uniq_membership", background=True,
-        )
-        db["team_memberships"].create_index("teamId", background=True)
-        db["team_memberships"].create_index(
-            [("conferenceId", 1), ("seasonId", 1)], background=True,
-        )
-    except Exception:
-        pass
+def _season_create_year(year_str: str, semester_label: str) -> int:
+    """Mongo stored a year-pair string; Phase 1 schema stores a single int year.
+    Convention: Fall keeps the first year, Spring keeps the second, Summer keeps
+    the first. Matches the Mongo _season_label() logic."""
+    if not re.match(r"^\d{4}-\d{4}$", year_str):
+        raise HTTPException(status_code=400, detail="year must be like 2025-2026")
+    parts = year_str.split("-")
+    return int(parts[1] if semester_label == "Spring" else parts[0])
 
 
-_ensure_match_index()
-_ensure_hierarchy_indexes()
-_fix_matchid_index()
+def _season_year_string(year: int, semester_label: str) -> str:
+    """Reverse of _season_create_year for response synthesis.
+    Fall -> 'YYYY-YYYY+1'; Spring -> 'YYYY-1-YYYY'; Summer -> 'YYYY-YYYY+1'."""
+    if semester_label == "Spring":
+        return f"{year - 1}-{year}"
+    return f"{year}-{year + 1}"
 
 
-# ---------- models ----------
+def _season_label(org_abbr: str, semester_label: str, year_str: str) -> str:
+    years = year_str.split("-")
+    shown = years[0] if semester_label == "Fall" else (years[1] if len(years) > 1 else years[0])
+    return f"{org_abbr} {semester_label} {shown}"
+
+
+def _get_active_season_id(cur) -> Optional[int]:
+    cur.execute(
+        "SELECT id FROM seasons WHERE active = TRUE ORDER BY id ASC LIMIT 1"
+    )
+    row = cur.fetchone()
+    return row["id"] if row else None
+
+
+# ---------- response shapers ----------
+
+def _shape_school(r: dict) -> dict:
+    return {
+        "_id":       str(r["id"]),
+        "name":      r["name"],
+        "slug":      r["slug"],
+        "createdAt": r["created_at"].isoformat() if r.get("created_at") else None,
+    }
+
+
+def _shape_team(r: dict) -> dict:
+    return {
+        "_id":        str(r["id"]),
+        "teamName":   r["name"],                # Mongo alias
+        "slug":       r["slug"],
+        "school":     r.get("school_name") or "",
+        "schoolId":   str(r["school_id"]) if r.get("school_id") is not None else None,
+        "game":       _label_game(r.get("game")),
+        "tier":       r.get("tier"),
+        "wins":       r.get("wins") or 0,
+        "losses":     r.get("losses") or 0,
+        "mapWins":    r.get("map_wins") or 0,
+        "mapLosses":  r.get("map_losses") or 0,
+    }
+
+
+def _shape_player(r: dict, team_ids: Optional[list[int]] = None) -> dict:
+    return {
+        "_id":         str(r["id"]),
+        "displayName": r.get("display_name") or r.get("name") or "",
+        "riotId":      r.get("riot_id"),
+        "role":        r.get("role"),
+        "teamIds":     [str(t) for t in (team_ids or [])],
+        "active":      r.get("active", True),
+    }
+
+
+def _shape_org(r: dict) -> dict:
+    return {
+        "_id":          str(r["id"]),
+        "name":         r["name"],
+        "abbreviation": r["abbreviation"],
+        "slug":         r["slug"],
+        "games":        [_label_game(g) for g in (r.get("games") or [])],
+    }
+
+
+def _shape_season(r: dict) -> dict:
+    semester_label = _label_semester(r.get("semester"))
+    year_str = _season_year_string(r["year"], semester_label) if r.get("year") else ""
+    return {
+        "_id":      str(r["id"]),
+        "orgId":    str(r["org_id"]),
+        "year":     year_str,
+        "semester": semester_label,
+        "label":    r.get("label") or "",
+        "active":   r.get("active", False),
+    }
+
+
+def _shape_conference(r: dict) -> dict:
+    return {
+        "_id":       str(r["id"]),
+        "orgId":     str(r["org_id"]),
+        "name":      r["name"],
+        "shortName": r.get("short_name") or r["name"],
+        "slug":      r["slug"],
+        "tier":      r.get("tier"),
+        "kind":      r.get("kind"),
+    }
+
+
+def _shape_membership(r: dict) -> dict:
+    return {
+        "_id":             str(r["id"]),
+        "teamId":          str(r["team_id"]),
+        "conferenceId":    str(r["conference_id"]),
+        "seasonId":        str(r["season_id"]),
+        "active":          r.get("active", True),
+        # enriched fields populated by the caller (list endpoint):
+        "seasonLabel":     r.get("season_label"),
+        "conferenceName":  r.get("conference_name"),
+        "conferenceTier":  r.get("conference_tier"),
+        "orgAbbreviation": r.get("org_abbreviation"),
+        "teamName":        r.get("team_name_alias"),
+    }
+
+
+# ---------- Pydantic request models ----------
 
 class LoginReq(BaseModel):
     password: str
@@ -176,7 +268,7 @@ class TeamCreate(BaseModel):
     schoolId: str
     name: str
     game: Literal["Valorant", "League of Legends"]
-    tier: Optional[str] = None  # e.g., "Varsity", "JV"
+    tier: Optional[str] = None
 
 
 class PlayerCreate(BaseModel):
@@ -190,68 +282,55 @@ class PlayerLink(BaseModel):
     teamId: str
 
 
-# Match models
-class ValPlayerStat(BaseModel):
-    playerId: str
-    agent: str
-    kills: int
-    deaths: int
-    assists: int
-    acs: int
-    firstKills: int = 0
-    plants: int = 0
-    defuses: int = 0
-
-
-class ValMap(BaseModel):
-    mapName: str
-    team1Score: int
-    team2Score: int
-    team1Players: list[ValPlayerStat]
-    team2Players: list[ValPlayerStat]
-
-
-class LolPlayerStat(BaseModel):
-    playerId: str
-    champion: str
-    role: str
-    kills: int
-    deaths: int
-    assists: int
-    cs: int
-    gold: int
-    damage: int
-    vision: int = 0
-    wards: int = 0
-
-
-class LeagueCreate(BaseModel):
+class OrgCreate(BaseModel):
     name: str
     abbreviation: str
-    game: Literal["Valorant", "League of Legends"]
-    season: str = ""
-    conference: Optional[str] = None  # e.g. "NECC", "NACE", "Riot"
+    games: list[str] = Field(default_factory=list)
 
 
-class MatchCreate(BaseModel):
-    game: Literal["Valorant", "League of Legends"]
-    team1Id: str
-    team2Id: str
-    date: Optional[str] = None
-    format: Literal["BO1", "BO3", "BO5"] = "BO1"
-    # Legacy single-league reference (kept for backward compatibility).
-    leagueId: Optional[str] = None
-    # New hierarchy refs — any/all may be provided; frontend passes all three.
-    orgId: Optional[str] = None
-    seasonId: Optional[str] = None
-    conferenceId: Optional[str] = None
-    # Valorant only
-    maps: list[ValMap] = Field(default_factory=list)
-    # LoL only (per-series totals with map count)
-    team1Score: Optional[int] = None
-    team2Score: Optional[int] = None
-    lolTeam1Players: list[LolPlayerStat] = Field(default_factory=list)
-    lolTeam2Players: list[LolPlayerStat] = Field(default_factory=list)
+class OrgUpdate(BaseModel):
+    name: Optional[str] = None
+    abbreviation: Optional[str] = None
+    games: Optional[list[str]] = None
+
+
+class SeasonCreate(BaseModel):
+    orgId: str
+    year: str
+    semester: Literal["Fall", "Spring", "Summer"]
+    active: bool = False
+
+
+class SeasonUpdate(BaseModel):
+    year: Optional[str] = None
+    semester: Optional[Literal["Fall", "Spring", "Summer"]] = None
+    active: Optional[bool] = None
+
+
+class ConferenceCreate(BaseModel):
+    orgId: str
+    name: str
+    shortName: Optional[str] = None
+    tier: Optional[str] = None
+    kind: Optional[str] = None
+
+
+class ConferenceUpdate(BaseModel):
+    name: Optional[str] = None
+    shortName: Optional[str] = None
+    tier: Optional[str] = None
+    kind: Optional[str] = None
+
+
+class MembershipCreate(BaseModel):
+    teamId: str
+    conferenceId: str
+    seasonId: str
+    active: bool = True
+
+
+class MembershipUpdate(BaseModel):
+    active: bool
 
 
 # ---------- auth routes ----------
@@ -273,839 +352,589 @@ def me():
 # ---------- schools ----------
 
 @router.get("/schools", dependencies=[Depends(require_admin)])
-def list_schools(q: str = Query("", max_length=100), limit: int = 20):
-    db = _db()
-    flt: dict[str, Any] = {}
-    if q:
-        flt["name"] = {"$regex": re.escape(q), "$options": "i"}
-    rows = list(db["schools"].find(flt).limit(limit))
-    return [_doc(r) for r in rows]
+def list_schools(q: str = Query("", max_length=100), limit: int = Query(20, ge=1, le=200)):
+    with get_cursor() as cur:
+        if q:
+            cur.execute(
+                "SELECT * FROM schools WHERE name ILIKE %s ORDER BY name LIMIT %s",
+                (f"%{q}%", limit),
+            )
+        else:
+            cur.execute("SELECT * FROM schools ORDER BY name LIMIT %s", (limit,))
+        rows = cur.fetchall()
+    return [_shape_school(r) for r in rows]
 
 
 @router.post("/schools", dependencies=[Depends(require_admin)])
 def create_school(req: SchoolCreate):
-    db = _db()
     name = req.name.strip()
     if not name:
         raise HTTPException(400, "name required")
     slug = _slugify(name)
-    existing = db["schools"].find_one({"slug": slug})
-    if existing:
-        return _doc(existing)
-    doc = {"name": name, "slug": slug, "createdAt": datetime.now(timezone.utc).isoformat()}
-    res = db["schools"].insert_one(doc)
-    doc["_id"] = res.inserted_id
-    return _doc(doc)
+    with get_cursor() as cur:
+        cur.execute("SELECT * FROM schools WHERE slug = %s", (slug,))
+        existing = cur.fetchone()
+        if existing:
+            return _shape_school(existing)
+        cur.execute(
+            "INSERT INTO schools (name, slug) VALUES (%s, %s) RETURNING *",
+            (name, slug),
+        )
+        row = cur.fetchone()
+    return _shape_school(row)
 
 
-# ---------- leagues ----------
-
-@router.get("/leagues", dependencies=[Depends(require_admin)])
-def list_leagues(
-    q: str = Query("", max_length=100),
-    game: Optional[str] = None,
-    limit: int = 20,
-):
-    db = _db()
-    flt: dict[str, Any] = {}
-    if q:
-        flt["$or"] = [
-            {"name": {"$regex": re.escape(q), "$options": "i"}},
-            {"abbreviation": {"$regex": re.escape(q), "$options": "i"}},
-        ]
-    if game:
-        flt["game"] = game
-    rows = list(db["leagues"].find(flt).limit(limit))
-    return [_doc(r) for r in rows]
-
-
-@router.post("/leagues", dependencies=[Depends(require_admin)])
-def create_league(req: LeagueCreate):
-    db = _db()
-    name = req.name.strip()
-    if not name:
-        raise HTTPException(400, "name required")
-    abbreviation = req.abbreviation.strip() or name.upper()[:6]
-    slug = _slugify(abbreviation or name)
-    existing = db["leagues"].find_one({"slug": slug, "game": req.game})
-    if existing:
-        return _doc(existing)
-    doc = {
-        "name": name,
-        "abbreviation": abbreviation,
-        "slug": slug,
-        "game": req.game,
-        "season": req.season.strip() or "",
-        "conference": (req.conference or "").strip() or None,
-        "description": "",
-        "standings": [],
-        "createdAt": datetime.now(timezone.utc).isoformat(),
-    }
-    res = db["leagues"].insert_one(doc)
-    doc["_id"] = res.inserted_id
-    return _doc(doc)
-
-
-# ---------- teams ----------
+# ---------- teams (admin) ----------
 
 @router.get("/teams", dependencies=[Depends(require_admin)])
-def list_teams(
+def list_admin_teams(
     q: str = Query("", max_length=100),
     schoolId: Optional[str] = None,
     game: Optional[str] = None,
-    limit: int = 50,
+    limit: int = Query(50, ge=1, le=200),
 ):
-    db = _db()
-    flt: dict[str, Any] = {}
-    if q:
-        flt["$or"] = [
-            {"teamName": {"$regex": re.escape(q), "$options": "i"}},
-            {"school": {"$regex": re.escape(q), "$options": "i"}},
-        ]
-    if schoolId:
-        flt["schoolId"] = _oid(schoolId)
-    if game:
-        flt["game"] = game
-    rows = list(db["teams"].find(flt).limit(limit))
-    return [_doc(r) for r in rows]
+    school_id = _int_id(schoolId, "schoolId") if schoolId else None
+    db_game = _db_game(game) if game else None
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT * FROM teams "
+            "WHERE (%s::text IS NULL OR (name ILIKE %s OR school_name ILIKE %s)) "
+            "  AND (%s::bigint IS NULL OR school_id = %s::bigint) "
+            "  AND (%s::text IS NULL OR game = %s::text) "
+            "ORDER BY name LIMIT %s",
+            (q or None, f"%{q}%", f"%{q}%", school_id, school_id, db_game, db_game, limit),
+        )
+        rows = cur.fetchall()
+    return [_shape_team(r) for r in rows]
 
 
 @router.post("/teams", dependencies=[Depends(require_admin)])
 def create_team(req: TeamCreate):
-    db = _db()
-    school = db["schools"].find_one({"_id": _oid(req.schoolId)})
-    if not school:
-        raise HTTPException(404, "School not found")
+    school_id = _int_id(req.schoolId, "schoolId")
     name = req.name.strip()
+    if not name:
+        raise HTTPException(400, "name required")
     slug = _slugify(name)
-    existing = db["teams"].find_one({"slug": slug, "game": req.game})
-    if existing:
-        return _doc(existing)
-    doc = {
-        "teamName": name,
-        "slug": slug,
-        "school": school["name"],
-        "schoolId": school["_id"],
-        "game": req.game,
-        "tier": req.tier,
-        "wins": 0,
-        "losses": 0,
-        "mapWins": 0,
-        "mapLosses": 0,
-    }
-    res = db["teams"].insert_one(doc)
-    doc["_id"] = res.inserted_id
-    return _doc(doc)
+    db_game = _db_game(req.game)
+    with get_cursor() as cur:
+        cur.execute("SELECT * FROM schools WHERE id = %s", (school_id,))
+        school = cur.fetchone()
+        if not school:
+            raise HTTPException(404, "School not found")
+        cur.execute("SELECT * FROM teams WHERE slug = %s AND game = %s", (slug, db_game))
+        existing = cur.fetchone()
+        if existing:
+            return _shape_team(existing)
+        cur.execute(
+            "INSERT INTO teams (school_id, name, slug, game, tier, school_name) "
+            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING *",
+            (school_id, name, slug, db_game, req.tier, school["name"]),
+        )
+        row = cur.fetchone()
+    return _shape_team(row)
 
 
-# ---------- players ----------
+# ---------- players (admin) ----------
+
+def _player_team_ids(cur, player_id: int) -> list[int]:
+    cur.execute(
+        "SELECT team_id FROM team_players WHERE player_id = %s AND left_at IS NULL "
+        "ORDER BY joined_at ASC",
+        (player_id,),
+    )
+    return [r["team_id"] for r in cur.fetchall()]
+
 
 @router.get("/players", dependencies=[Depends(require_admin)])
-def list_players(
+def list_admin_players(
     q: str = Query("", max_length=100),
     teamId: Optional[str] = None,
     freeAgent: bool = False,
-    limit: int = 50,
-    skip: int = 0,
+    limit: int = Query(50, ge=1, le=500),
+    skip: int = Query(0, ge=0),
     paginated: bool = False,
 ):
-    """List players. Legacy callers get a plain list; pass `paginated=true` to get
-    `{ items, total }` so the admin table can render page numbers."""
-    db = _db()
-    flt: dict[str, Any] = {}
-    if q:
-        flt["$or"] = [
-            {"displayName": {"$regex": re.escape(q), "$options": "i"}},
-            {"riotId": {"$regex": re.escape(q), "$options": "i"}},
-        ]
-    if teamId:
-        flt["teamIds"] = _oid(teamId)
-    elif freeAgent:
-        flt["$or"] = (flt.get("$or") or []) + [
-            {"teamIds": {"$exists": False}},
-            {"teamIds": {"$size": 0}},
-        ]
-    cursor = db["players"].find(flt).sort("displayName", 1).skip(max(0, skip)).limit(limit)
-    rows = [_doc(r) for r in cursor]
+    team_id = _int_id(teamId, "teamId") if teamId else None
+    with get_cursor() as cur:
+        if team_id is not None:
+            base = (
+                "FROM players p "
+                "JOIN team_players tp ON tp.player_id = p.id AND tp.left_at IS NULL "
+                "WHERE tp.team_id = %s "
+                "  AND (%s::text IS NULL OR (p.display_name ILIKE %s OR p.riot_id ILIKE %s))"
+            )
+            params = (team_id, q or None, f"%{q}%", f"%{q}%")
+        elif freeAgent:
+            base = (
+                "FROM players p "
+                "WHERE NOT EXISTS ("
+                "    SELECT 1 FROM team_players tp "
+                "    WHERE tp.player_id = p.id AND tp.left_at IS NULL"
+                ") "
+                "  AND (%s::text IS NULL OR (p.display_name ILIKE %s OR p.riot_id ILIKE %s))"
+            )
+            params = (q or None, f"%{q}%", f"%{q}%")
+        else:
+            base = (
+                "FROM players p "
+                "WHERE (%s::text IS NULL OR (p.display_name ILIKE %s OR p.riot_id ILIKE %s))"
+            )
+            params = (q or None, f"%{q}%", f"%{q}%")
+
+        if paginated:
+            cur.execute(f"SELECT COUNT(*) AS n {base}", params)
+            total = cur.fetchone()["n"]
+        else:
+            total = None
+
+        cur.execute(
+            f"SELECT p.* {base} ORDER BY p.display_name LIMIT %s OFFSET %s",
+            (*params, limit, max(0, skip)),
+        )
+        rows = cur.fetchall()
+        items = [_shape_player(r, _player_team_ids(cur, r["id"])) for r in rows]
+
     if paginated:
-        return {"items": rows, "total": db["players"].count_documents(flt)}
-    return rows
+        return {"items": items, "total": total}
+    return items
 
 
 @router.post("/players", dependencies=[Depends(require_admin)])
 def create_player(req: PlayerCreate):
-    db = _db()
-    team_oids = [_oid(t) for t in req.teamIds]
-    doc = {
-        "displayName": req.displayName.strip(),
-        "riotId": (req.riotId or "").strip() or None,
-        "role": (req.role or "").strip() or None,
-        "teamIds": team_oids,
-        "active": len(team_oids) > 0,
-        "lastUpdated": datetime.now(timezone.utc).isoformat(),
-    }
-    res = db["players"].insert_one(doc)
-    doc["_id"] = res.inserted_id
-    return _doc(doc)
+    name = req.displayName.strip()
+    if not name:
+        raise HTTPException(400, "displayName required")
+    team_ids = [_int_id(t, "teamId") for t in req.teamIds]
+    riot_id = (req.riotId or "").strip() or None
+    role = (req.role or "").strip() or None
+
+    with get_conn() as conn:
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # Default season for team_players inserts (if any).
+                season_id = None
+                if team_ids:
+                    cur.execute("SELECT id FROM seasons WHERE active = TRUE ORDER BY id ASC LIMIT 1")
+                    s_row = cur.fetchone()
+                    if s_row is None:
+                        raise HTTPException(
+                            400,
+                            "No active season — create one before linking players to teams "
+                            "(POST /api/admin/seasons with active=true).",
+                        )
+                    season_id = s_row["id"]
+
+                cur.execute(
+                    "INSERT INTO players (name, display_name, riot_id, role, game, active) "
+                    "VALUES (%s, %s, %s, %s, %s, %s) RETURNING *",
+                    (name, name, riot_id, role, "valorant", bool(team_ids)),
+                )
+                player = cur.fetchone()
+
+                for tid in team_ids:
+                    cur.execute(
+                        "INSERT INTO team_players (team_id, player_id, season_id) "
+                        "VALUES (%s, %s, %s)",
+                        (tid, player["id"], season_id),
+                    )
+            conn.commit()
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception:
+            conn.rollback()
+            raise
+
+    with get_cursor() as cur:
+        cur.execute("SELECT * FROM players WHERE id = %s", (player["id"],))
+        full = cur.fetchone()
+        return _shape_player(full, _player_team_ids(cur, full["id"]))
 
 
 @router.patch("/players/{player_id}/link", dependencies=[Depends(require_admin)])
 def link_player(player_id: str, req: PlayerLink):
-    db = _db()
-    pid = _oid(player_id)
-    tid = _oid(req.teamId)
-    db["players"].update_one(
-        {"_id": pid},
-        {"$addToSet": {"teamIds": tid}, "$set": {"active": True}},
-    )
-    return _doc(db["players"].find_one({"_id": pid}) or {})
+    pid = _int_id(player_id, "player_id")
+    tid = _int_id(req.teamId, "teamId")
+
+    with get_conn() as conn:
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT id FROM seasons WHERE active = TRUE ORDER BY id ASC LIMIT 1")
+                s_row = cur.fetchone()
+                if s_row is None:
+                    raise HTTPException(
+                        400,
+                        "No active season — create one before linking players to teams.",
+                    )
+                cur.execute(
+                    "INSERT INTO team_players (team_id, player_id, season_id) "
+                    "VALUES (%s, %s, %s) "
+                    "ON CONFLICT DO NOTHING",
+                    (tid, pid, s_row["id"]),
+                )
+                cur.execute("UPDATE players SET active = TRUE WHERE id = %s", (pid,))
+            conn.commit()
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception:
+            conn.rollback()
+            raise
+
+    with get_cursor() as cur:
+        cur.execute("SELECT * FROM players WHERE id = %s", (pid,))
+        player = cur.fetchone()
+        if not player:
+            raise HTTPException(404, "Player not found")
+        return _shape_player(player, _player_team_ids(cur, pid))
 
 
 @router.patch("/players/{player_id}/unlink", dependencies=[Depends(require_admin)])
 def unlink_player(player_id: str, req: PlayerLink):
-    db = _db()
-    pid = _oid(player_id)
-    tid = _oid(req.teamId)
-    db["players"].update_one({"_id": pid}, {"$pull": {"teamIds": tid}})
-    player = db["players"].find_one({"_id": pid})
-    if player and not player.get("teamIds"):
-        db["players"].update_one({"_id": pid}, {"$set": {"active": False}})
-        player = db["players"].find_one({"_id": pid})
-    return _doc(player or {})
+    pid = _int_id(player_id, "player_id")
+    tid = _int_id(req.teamId, "teamId")
 
-
-# ---------- matches ----------
-
-def _apply_record_update(db, team_id: ObjectId, won: bool, map_wins: int, map_losses: int):
-    inc = {
-        "wins": 1 if won else 0,
-        "losses": 0 if won else 1,
-        "mapWins": map_wins,
-        "mapLosses": map_losses,
-    }
-    db["teams"].update_one({"_id": team_id}, {"$inc": inc})
-
-
-@router.post("/matches", dependencies=[Depends(require_admin)])
-def create_match(req: MatchCreate):
-    db = _db()
-    t1 = db["teams"].find_one({"_id": _oid(req.team1Id)})
-    t2 = db["teams"].find_one({"_id": _oid(req.team2Id)})
-    if not t1 or not t2:
-        raise HTTPException(404, "Team not found")
-    if t1["game"] != req.game or t2["game"] != req.game:
-        raise HTTPException(400, "Team game mismatch")
-
-    date = req.date or datetime.now(timezone.utc).isoformat()
-
-    # Resolve legacy league reference if provided (kept for back-compat).
-    league_oid: Optional[ObjectId] = None
-    league_name: Optional[str] = None
-    if req.leagueId:
-        league_doc = _db()["leagues"].find_one({"_id": _oid(req.leagueId)})
-        if league_doc:
-            league_oid = league_doc["_id"]
-            league_name = league_doc.get("abbreviation") or league_doc.get("name")
-
-    # Resolve new hierarchy refs: org / season / conference.
-    org_oid: Optional[ObjectId] = None
-    season_oid: Optional[ObjectId] = None
-    conf_oid: Optional[ObjectId] = None
-    org_abbr: Optional[str] = None
-    season_label: Optional[str] = None
-    conf_name: Optional[str] = None
-    if req.orgId:
-        org_doc = db["organizations"].find_one({"_id": _oid(req.orgId)})
-        if not org_doc:
-            raise HTTPException(404, "Organization not found")
-        org_oid = org_doc["_id"]
-        org_abbr = org_doc.get("abbreviation")
-    if req.seasonId:
-        season_doc = db["seasons"].find_one({"_id": _oid(req.seasonId)})
-        if not season_doc:
-            raise HTTPException(404, "Season not found")
-        if org_oid and season_doc["orgId"] != org_oid:
-            raise HTTPException(400, "Season does not belong to the selected organization")
-        season_oid = season_doc["_id"]
-        season_label = season_doc.get("label")
-    if req.conferenceId:
-        conf_doc = db["conferences"].find_one({"_id": _oid(req.conferenceId)})
-        if not conf_doc:
-            raise HTTPException(404, "Conference not found")
-        if org_oid and conf_doc["orgId"] != org_oid:
-            raise HTTPException(400, "Conference does not belong to the selected organization")
-        conf_oid = conf_doc["_id"]
-        conf_name = conf_doc.get("name")
-        # Fill in leagueName for display if legacy field is empty.
-        if not league_name and org_abbr:
-            tier = conf_doc.get("tier")
-            league_name = (
-                f"{org_abbr} {tier + ' ' if tier else ''}{conf_name}".strip()
-            )
-
-    if req.game == "Valorant":
-        if not req.maps:
-            raise HTTPException(400, "At least one map required")
-        t1_maps = sum(1 for m in req.maps if m.team1Score > m.team2Score)
-        t2_maps = sum(1 for m in req.maps if m.team2Score > m.team1Score)
-        winner_id = t1["_id"] if t1_maps > t2_maps else t2["_id"]
-
-        match_doc = {
-            "game": "Valorant",
-            "team1Id": t1["_id"],
-            "team2Id": t2["_id"],
-            "team1Name": t1["teamName"],
-            "team2Name": t2["teamName"],
-            "team1Score": t1_maps,
-            "team2Score": t2_maps,
-            "winnerTeamId": winner_id,
-            "format": req.format,
-            "date": date,
-            "leagueId": league_oid,
-            "leagueName": league_name,
-            "orgId": org_oid,
-            "seasonId": season_oid,
-            "conferenceId": conf_oid,
-            "orgAbbreviation": org_abbr,
-            "seasonLabel": season_label,
-            "conferenceName": conf_name,
-            "maps": [m.model_dump() for m in req.maps],
-        }
-        _dup = db["matches"].find_one({"$or": [
-            {"team1Id": t1["_id"], "team2Id": t2["_id"], "date": date, "game": "Valorant"},
-            {"team1Id": t2["_id"], "team2Id": t1["_id"], "date": date, "game": "Valorant"},
-        ]})
-        if _dup:
-            raise HTTPException(409, "A match between these teams on this date already exists")
+    with get_conn() as conn:
         try:
-            res = db["matches"].insert_one(match_doc)
-        except DuplicateKeyError:
-            raise HTTPException(409, "A match between these teams on this date already exists")
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    "UPDATE team_players SET left_at = NOW() "
+                    "WHERE player_id = %s AND team_id = %s AND left_at IS NULL",
+                    (pid, tid),
+                )
+                cur.execute(
+                    "SELECT COUNT(*) AS n FROM team_players "
+                    "WHERE player_id = %s AND left_at IS NULL",
+                    (pid,),
+                )
+                if cur.fetchone()["n"] == 0:
+                    cur.execute("UPDATE players SET active = FALSE WHERE id = %s", (pid,))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
 
-        # per-player stats rows
-        pms_rows = []
-        for m in req.maps:
-            for side, players in (("team1", m.team1Players), ("team2", m.team2Players)):
-                team_doc = t1 if side == "team1" else t2
-                team_score = m.team1Score if side == "team1" else m.team2Score
-                opp_score = m.team2Score if side == "team1" else m.team1Score
-                for p in players:
-                    pms_rows.append({
-                        "matchId": res.inserted_id,
-                        "game": "Valorant",
-                        "mapName": m.mapName,
-                        "playerId": _oid(p.playerId),
-                        "teamId": team_doc["_id"],
-                        "teamName": team_doc["teamName"],
-                        "agent": p.agent,
-                        "kills": p.kills,
-                        "deaths": p.deaths,
-                        "assists": p.assists,
-                        "acs": p.acs,
-                        "firstKills": p.firstKills,
-                        "plants": p.plants,
-                        "defuses": p.defuses,
-                        "win": team_score > opp_score,
-                    })
-        if pms_rows:
-            db["player match stats"].insert_many(pms_rows)
-
-        _apply_record_update(db, t1["_id"], winner_id == t1["_id"], t1_maps, t2_maps)
-        _apply_record_update(db, t2["_id"], winner_id == t2["_id"], t2_maps, t1_maps)
-        return {"ok": True, "matchId": str(res.inserted_id), "winnerTeamId": str(winner_id)}
-
-    # League of Legends
-    if req.team1Score is None or req.team2Score is None:
-        raise HTTPException(400, "team1Score/team2Score required for LoL")
-    winner_id = t1["_id"] if req.team1Score > req.team2Score else t2["_id"]
-    match_doc = {
-        "game": "League of Legends",
-        "team1Id": t1["_id"],
-        "team2Id": t2["_id"],
-        "team1Name": t1["teamName"],
-        "team2Name": t2["teamName"],
-        "team1Score": req.team1Score,
-        "team2Score": req.team2Score,
-        "winnerTeamId": winner_id,
-        "format": req.format,
-        "date": date,
-        "leagueId": league_oid,
-        "leagueName": league_name,
-        "orgId": org_oid,
-        "seasonId": season_oid,
-        "conferenceId": conf_oid,
-        "orgAbbreviation": org_abbr,
-        "seasonLabel": season_label,
-        "conferenceName": conf_name,
-        "players": {
-            "team1": [p.model_dump() for p in req.lolTeam1Players],
-            "team2": [p.model_dump() for p in req.lolTeam2Players],
-        },
-    }
-    _dup = db["matches"].find_one({"$or": [
-        {"team1Id": t1["_id"], "team2Id": t2["_id"], "date": date, "game": "League of Legends"},
-        {"team1Id": t2["_id"], "team2Id": t1["_id"], "date": date, "game": "League of Legends"},
-    ]})
-    if _dup:
-        raise HTTPException(409, "A match between these teams on this date already exists")
-    try:
-        res = db["matches"].insert_one(match_doc)
-    except DuplicateKeyError:
-        raise HTTPException(409, "A match between these teams on this date already exists")
-
-    pms_rows = []
-    for side, players in (("team1", req.lolTeam1Players), ("team2", req.lolTeam2Players)):
-        team_doc = t1 if side == "team1" else t2
-        team_score = req.team1Score if side == "team1" else req.team2Score
-        opp_score = req.team2Score if side == "team1" else req.team1Score
-        for p in players:
-            pms_rows.append({
-                "matchId": res.inserted_id,
-                "game": "League of Legends",
-                "playerId": _oid(p.playerId),
-                "teamId": team_doc["_id"],
-                "teamName": team_doc["teamName"],
-                "champion": p.champion,
-                "role": p.role,
-                "kills": p.kills,
-                "deaths": p.deaths,
-                "assists": p.assists,
-                "cs": p.cs,
-                "gold": p.gold,
-                "damage": p.damage,
-                "vision": p.vision,
-                "wards": p.wards,
-                "win": team_score > opp_score,
-            })
-    if pms_rows:
-        db["player match stats"].insert_many(pms_rows)
-
-    _apply_record_update(db, t1["_id"], winner_id == t1["_id"], req.team1Score, req.team2Score)
-    _apply_record_update(db, t2["_id"], winner_id == t2["_id"], req.team2Score, req.team1Score)
-    return {"ok": True, "matchId": str(res.inserted_id), "winnerTeamId": str(winner_id)}
-
-
-# ---------- match edit / delete ----------
-
-def _reverse_record_update(db, team_id: ObjectId, won: bool, map_wins: int, map_losses: int):
-    """Undo a prior _apply_record_update."""
-    inc = {
-        "wins": -1 if won else 0,
-        "losses": 0 if won else -1,
-        "mapWins": -map_wins,
-        "mapLosses": -map_losses,
-    }
-    db["teams"].update_one({"_id": team_id}, {"$inc": inc})
-
-
-class MatchScorePatch(BaseModel):
-    team1Score: int
-    team2Score: int
-
-
-@router.patch("/matches/{match_id}", dependencies=[Depends(require_admin)])
-def update_match(match_id: str, req: MatchScorePatch):
-    """Correct a mis-entered series score. Adjusts team W/L counters accordingly.
-
-    Limited to series-level score edits (the common "wrong number on the scoreboard"
-    case). Per-map / per-player edits still require a delete + re-insert.
-    """
-    db = _db()
-    oid = _oid(match_id)
-    match = db["matches"].find_one({"_id": oid})
-    if not match:
-        raise HTTPException(404, "Match not found")
-
-    t1_id = match["team1Id"]
-    t2_id = match["team2Id"]
-    old_t1 = int(match.get("team1Score", 0))
-    old_t2 = int(match.get("team2Score", 0))
-    old_winner = match.get("winnerTeamId")
-
-    # Reverse old deltas.
-    _reverse_record_update(db, t1_id, old_winner == t1_id, old_t1, old_t2)
-    _reverse_record_update(db, t2_id, old_winner == t2_id, old_t2, old_t1)
-
-    # Apply new.
-    if req.team1Score == req.team2Score:
-        raise HTTPException(400, "Scores cannot be tied")
-    new_winner = t1_id if req.team1Score > req.team2Score else t2_id
-    db["matches"].update_one(
-        {"_id": oid},
-        {"$set": {
-            "team1Score": req.team1Score,
-            "team2Score": req.team2Score,
-            "winnerTeamId": new_winner,
-        }},
-    )
-    _apply_record_update(db, t1_id, new_winner == t1_id, req.team1Score, req.team2Score)
-    _apply_record_update(db, t2_id, new_winner == t2_id, req.team2Score, req.team1Score)
-    return {"ok": True, "matchId": str(oid), "winnerTeamId": str(new_winner)}
-
-
-@router.delete("/matches/{match_id}", dependencies=[Depends(require_admin)])
-def delete_match(match_id: str):
-    """Hard-delete a match. Reverses team W/L and removes player stat rows."""
-    db = _db()
-    oid = _oid(match_id)
-    match = db["matches"].find_one({"_id": oid})
-    if not match:
-        raise HTTPException(404, "Match not found")
-
-    t1_id = match["team1Id"]
-    t2_id = match["team2Id"]
-    t1_score = int(match.get("team1Score", 0))
-    t2_score = int(match.get("team2Score", 0))
-    winner = match.get("winnerTeamId")
-
-    _reverse_record_update(db, t1_id, winner == t1_id, t1_score, t2_score)
-    _reverse_record_update(db, t2_id, winner == t2_id, t2_score, t1_score)
-
-    removed = db["player match stats"].delete_many({"matchId": oid}).deleted_count
-    db["matches"].delete_one({"_id": oid})
-    return {"ok": True, "deletedStatRows": removed}
-
-
-# ---------- admin dashboard stats ----------
-
-@router.get("/stats", dependencies=[Depends(require_admin)])
-def admin_stats():
-    db = _db()
-    recent = list(
-        db["matches"]
-        .find({}, {"maps": 0, "players": 0})
-        .sort("date", -1)
-        .limit(5)
-    )
-    return {
-        "counts": {
-            "matches": db["matches"].count_documents({}),
-            "players": db["players"].count_documents({}),
-            "teams": db["teams"].count_documents({}),
-            "schools": db["schools"].count_documents({}),
-            "organizations": db["organizations"].count_documents({}),
-            "conferences": db["conferences"].count_documents({}),
-        },
-        "recent_matches": [_doc(r) for r in recent],
-    }
-
-
-# ====================================================================
-# League hierarchy: organizations / seasons / conferences / memberships
-# ====================================================================
-
-GAME_LITERAL = Literal["Valorant", "League of Legends"]
-SEMESTER_LITERAL = Literal["Fall", "Spring"]
-CONF_KIND_LITERAL = Literal["regional", "division", "partner", "tier"]
-
-
-# ---------- models ----------
-
-class OrgCreate(BaseModel):
-    name: str
-    abbreviation: str
-    games: list[GAME_LITERAL] = Field(default_factory=list)
-
-
-class OrgUpdate(BaseModel):
-    name: Optional[str] = None
-    abbreviation: Optional[str] = None
-    games: Optional[list[GAME_LITERAL]] = None
-
-
-class SeasonCreate(BaseModel):
-    orgId: str
-    year: str  # "2025-2026"
-    semester: SEMESTER_LITERAL
-    active: bool = False
-
-
-class SeasonUpdate(BaseModel):
-    year: Optional[str] = None
-    semester: Optional[SEMESTER_LITERAL] = None
-    active: Optional[bool] = None
-
-
-class ConferenceCreate(BaseModel):
-    orgId: str
-    name: str
-    shortName: Optional[str] = None
-    tier: Optional[str] = None
-    kind: CONF_KIND_LITERAL = "regional"
-
-
-class ConferenceUpdate(BaseModel):
-    name: Optional[str] = None
-    shortName: Optional[str] = None
-    tier: Optional[str] = None
-    kind: Optional[CONF_KIND_LITERAL] = None
-
-
-class MembershipCreate(BaseModel):
-    teamId: str
-    conferenceId: str
-    seasonId: str
-    active: bool = True
-
-
-class MembershipUpdate(BaseModel):
-    active: bool
+    with get_cursor() as cur:
+        cur.execute("SELECT * FROM players WHERE id = %s", (pid,))
+        player = cur.fetchone()
+        if not player:
+            raise HTTPException(404, "Player not found")
+        return _shape_player(player, _player_team_ids(cur, pid))
 
 
 # ---------- organizations ----------
 
 @router.get("/orgs", dependencies=[Depends(require_admin)])
-def list_orgs(q: str = Query("", max_length=100), game: Optional[str] = None, limit: int = 50):
-    db = _db()
-    flt: dict[str, Any] = {}
-    if q:
-        flt["$or"] = [
-            {"name": {"$regex": re.escape(q), "$options": "i"}},
-            {"abbreviation": {"$regex": re.escape(q), "$options": "i"}},
-        ]
-    if game:
-        flt["games"] = game
-    rows = list(db["organizations"].find(flt).sort("abbreviation", 1).limit(limit))
-    return [_doc(r) for r in rows]
+def list_orgs(q: str = Query("", max_length=100), game: Optional[str] = None, limit: int = Query(50, ge=1, le=200)):
+    db_g = _db_game(game) if game else None
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT * FROM organizations "
+            "WHERE (%s::text IS NULL OR (name ILIKE %s OR abbreviation ILIKE %s)) "
+            "  AND (%s::text IS NULL OR %s::text = ANY(games)) "
+            "ORDER BY abbreviation LIMIT %s",
+            (q or None, f"%{q}%", f"%{q}%", db_g, db_g, limit),
+        )
+        rows = cur.fetchall()
+    return [_shape_org(r) for r in rows]
 
 
 @router.post("/orgs", dependencies=[Depends(require_admin)])
 def create_org(req: OrgCreate):
-    db = _db()
     name = req.name.strip()
     abbr = req.abbreviation.strip().upper()
     if not name or not abbr:
         raise HTTPException(400, "name and abbreviation required")
     slug = _slugify(abbr)
-    existing = db["organizations"].find_one({"slug": slug})
-    if existing:
-        return _doc(existing)
-    doc = {
-        "name": name,
-        "abbreviation": abbr,
-        "slug": slug,
-        "games": req.games,
-        "createdAt": datetime.now(timezone.utc).isoformat(),
-    }
-    res = db["organizations"].insert_one(doc)
-    doc["_id"] = res.inserted_id
-    return _doc(doc)
+    games_db = [_db_game(g) for g in req.games if _db_game(g) is not None]
+    if not games_db:
+        raise HTTPException(400, "at least one game required (Valorant or League of Legends)")
+    with get_cursor() as cur:
+        cur.execute("SELECT * FROM organizations WHERE slug = %s", (slug,))
+        existing = cur.fetchone()
+        if existing:
+            return _shape_org(existing)
+        cur.execute(
+            "INSERT INTO organizations (name, abbreviation, slug, games) "
+            "VALUES (%s, %s, %s, %s) RETURNING *",
+            (name, abbr, slug, games_db),
+        )
+        row = cur.fetchone()
+    return _shape_org(row)
 
 
 @router.patch("/orgs/{org_id}", dependencies=[Depends(require_admin)])
 def update_org(org_id: str, req: OrgUpdate):
-    db = _db()
-    oid = _oid(org_id)
-    update: dict[str, Any] = {}
+    oid = _int_id(org_id, "org_id")
+    sets: list[str] = []
+    params: list[Any] = []
     if req.name is not None:
-        update["name"] = req.name.strip()
+        sets.append("name = %s"); params.append(req.name.strip())
     if req.abbreviation is not None:
         abbr = req.abbreviation.strip().upper()
-        update["abbreviation"] = abbr
-        update["slug"] = _slugify(abbr)
+        sets.append("abbreviation = %s"); params.append(abbr)
+        sets.append("slug = %s"); params.append(_slugify(abbr))
     if req.games is not None:
-        update["games"] = req.games
-    if update:
-        db["organizations"].update_one({"_id": oid}, {"$set": update})
-    return _doc(db["organizations"].find_one({"_id": oid}) or {})
+        games_db = [_db_game(g) for g in req.games if _db_game(g) is not None]
+        if not games_db:
+            raise HTTPException(400, "games cannot be empty")
+        sets.append("games = %s"); params.append(games_db)
+    with get_cursor() as cur:
+        if sets:
+            cur.execute(f"UPDATE organizations SET {', '.join(sets)} WHERE id = %s", (*params, oid))
+        cur.execute("SELECT * FROM organizations WHERE id = %s", (oid,))
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "Organization not found")
+    return _shape_org(row)
 
 
 @router.delete("/orgs/{org_id}", dependencies=[Depends(require_admin)])
 def delete_org(org_id: str):
-    """Cascading delete: removes seasons, conferences, and memberships for this org."""
-    db = _db()
-    oid = _oid(org_id)
-    season_ids = [s["_id"] for s in db["seasons"].find({"orgId": oid}, {"_id": 1})]
-    conf_ids = [c["_id"] for c in db["conferences"].find({"orgId": oid}, {"_id": 1})]
-    db["team_memberships"].delete_many({
-        "$or": [
-            {"seasonId": {"$in": season_ids}},
-            {"conferenceId": {"$in": conf_ids}},
-        ]
-    })
-    db["seasons"].delete_many({"orgId": oid})
-    db["conferences"].delete_many({"orgId": oid})
-    db["organizations"].delete_one({"_id": oid})
+    """Cascading delete: removes memberships → conferences + seasons → org.
+    Phase 1 schema uses ON DELETE RESTRICT for org refs, so cascading is
+    application-side.
+    """
+    oid = _int_id(org_id, "org_id")
+    with get_conn() as conn:
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    "DELETE FROM team_memberships WHERE conference_id IN "
+                    "(SELECT id FROM conferences WHERE org_id = %s)",
+                    (oid,),
+                )
+                cur.execute(
+                    "DELETE FROM team_memberships WHERE season_id IN "
+                    "(SELECT id FROM seasons WHERE org_id = %s)",
+                    (oid,),
+                )
+                cur.execute("DELETE FROM conferences WHERE org_id = %s", (oid,))
+                cur.execute("DELETE FROM seasons WHERE org_id = %s", (oid,))
+                cur.execute("DELETE FROM organizations WHERE id = %s", (oid,))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
     return {"ok": True}
 
 
 # ---------- seasons ----------
 
-def _season_label(org_abbr: str, semester: str, year: str) -> str:
-    # year "2025-2026" — pick first year for Fall, second for Spring
-    years = year.split("-")
-    shown = years[0] if semester == "Fall" else (years[1] if len(years) > 1 else years[0])
-    return f"{org_abbr} {semester} {shown}"
-
-
 @router.get("/seasons", dependencies=[Depends(require_admin)])
-def list_seasons(orgId: Optional[str] = None, active: Optional[bool] = None, limit: int = 100):
-    db = _db()
-    flt: dict[str, Any] = {}
-    if orgId:
-        flt["orgId"] = _oid(orgId)
-    if active is not None:
-        flt["active"] = active
-    rows = list(db["seasons"].find(flt).sort([("year", -1), ("semester", 1)]).limit(limit))
-    return [_doc(r) for r in rows]
+def list_seasons(orgId: Optional[str] = None, active: Optional[bool] = None, limit: int = Query(100, ge=1, le=500)):
+    oid = _int_id(orgId, "orgId") if orgId else None
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT * FROM seasons "
+            "WHERE (%s::bigint IS NULL OR org_id = %s::bigint) "
+            "  AND (%s::boolean IS NULL OR active = %s::boolean) "
+            "ORDER BY year DESC, semester ASC LIMIT %s",
+            (oid, oid, active, active, limit),
+        )
+        rows = cur.fetchall()
+    return [_shape_season(r) for r in rows]
 
 
 @router.post("/seasons", dependencies=[Depends(require_admin)])
 def create_season(req: SeasonCreate):
-    db = _db()
-    org = db["organizations"].find_one({"_id": _oid(req.orgId)})
-    if not org:
-        raise HTTPException(404, "Organization not found")
-    year = req.year.strip()
-    if not re.match(r"^\d{4}-\d{4}$", year):
-        raise HTTPException(400, "year must be like 2025-2026")
-    existing = db["seasons"].find_one({
-        "orgId": org["_id"], "year": year, "semester": req.semester,
-    })
-    if existing:
-        return _doc(existing)
-    label = _season_label(org["abbreviation"], req.semester, year)
-    doc = {
-        "orgId": org["_id"],
-        "year": year,
-        "semester": req.semester,
-        "label": label,
-        "active": req.active,
-        "createdAt": datetime.now(timezone.utc).isoformat(),
-    }
-    if req.active:
-        # only one active season per org
-        db["seasons"].update_many({"orgId": org["_id"]}, {"$set": {"active": False}})
-    try:
-        res = db["seasons"].insert_one(doc)
-    except DuplicateKeyError:
-        raise HTTPException(409, "Season already exists")
-    doc["_id"] = res.inserted_id
-    return _doc(doc)
+    oid = _int_id(req.orgId, "orgId")
+    db_year = _season_create_year(req.year, req.semester)
+    db_sem = _db_semester(req.semester)
+
+    with get_conn() as conn:
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM organizations WHERE id = %s", (oid,))
+                org = cur.fetchone()
+                if not org:
+                    raise HTTPException(404, "Organization not found")
+                cur.execute(
+                    "SELECT * FROM seasons WHERE org_id = %s AND year = %s AND semester = %s",
+                    (oid, db_year, db_sem),
+                )
+                existing = cur.fetchone()
+                if existing:
+                    return _shape_season(existing)
+                if req.active:
+                    cur.execute("UPDATE seasons SET active = FALSE WHERE org_id = %s", (oid,))
+                label = _season_label(org["abbreviation"], req.semester, req.year)
+                try:
+                    cur.execute(
+                        "INSERT INTO seasons (org_id, year, semester, label, active) "
+                        "VALUES (%s, %s, %s, %s, %s) RETURNING *",
+                        (oid, db_year, db_sem, label, req.active),
+                    )
+                    row = cur.fetchone()
+                except UniqueViolation:
+                    raise HTTPException(409, "Season already exists")
+            conn.commit()
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception:
+            conn.rollback()
+            raise
+    return _shape_season(row)
 
 
 @router.patch("/seasons/{season_id}", dependencies=[Depends(require_admin)])
 def update_season(season_id: str, req: SeasonUpdate):
-    db = _db()
-    oid = _oid(season_id)
-    season = db["seasons"].find_one({"_id": oid})
-    if not season:
-        raise HTTPException(404, "Season not found")
-    update: dict[str, Any] = {}
-    if req.year is not None:
-        if not re.match(r"^\d{4}-\d{4}$", req.year):
-            raise HTTPException(400, "year must be like 2025-2026")
-        update["year"] = req.year
-    if req.semester is not None:
-        update["semester"] = req.semester
-    if req.active is True:
-        db["seasons"].update_many(
-            {"orgId": season["orgId"], "_id": {"$ne": oid}},
-            {"$set": {"active": False}},
-        )
-        update["active"] = True
-    elif req.active is False:
-        update["active"] = False
-    # rebuild label if year/semester changed
-    if "year" in update or "semester" in update:
-        org = db["organizations"].find_one({"_id": season["orgId"]})
-        if org:
-            update["label"] = _season_label(
-                org["abbreviation"],
-                update.get("semester", season["semester"]),
-                update.get("year", season["year"]),
-            )
-    if update:
-        db["seasons"].update_one({"_id": oid}, {"$set": update})
-    return _doc(db["seasons"].find_one({"_id": oid}) or {})
+    sid = _int_id(season_id, "season_id")
+    with get_conn() as conn:
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM seasons WHERE id = %s", (sid,))
+                season = cur.fetchone()
+                if not season:
+                    raise HTTPException(404, "Season not found")
+                cur.execute("SELECT * FROM organizations WHERE id = %s", (season["org_id"],))
+                org = cur.fetchone()
+                semester_label = _label_semester(season["semester"])
+                year_int = season["year"]
+                sets: list[str] = []
+                params: list[Any] = []
+                if req.semester is not None:
+                    semester_label = req.semester
+                    sets.append("semester = %s"); params.append(_db_semester(req.semester))
+                if req.year is not None:
+                    year_int = _season_create_year(req.year, semester_label)
+                    sets.append("year = %s"); params.append(year_int)
+                if req.active is True:
+                    cur.execute(
+                        "UPDATE seasons SET active = FALSE WHERE org_id = %s AND id <> %s",
+                        (season["org_id"], sid),
+                    )
+                    sets.append("active = TRUE")
+                elif req.active is False:
+                    sets.append("active = FALSE")
+                if "year = %s" in sets or "semester = %s" in sets:
+                    new_year_str = _season_year_string(year_int, semester_label)
+                    sets.append("label = %s"); params.append(_season_label(org["abbreviation"], semester_label, new_year_str))
+                if sets:
+                    cur.execute(f"UPDATE seasons SET {', '.join(sets)} WHERE id = %s", (*params, sid))
+                cur.execute("SELECT * FROM seasons WHERE id = %s", (sid,))
+                row = cur.fetchone()
+            conn.commit()
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception:
+            conn.rollback()
+            raise
+    return _shape_season(row)
 
 
 @router.delete("/seasons/{season_id}", dependencies=[Depends(require_admin)])
 def delete_season(season_id: str):
-    db = _db()
-    oid = _oid(season_id)
-    db["team_memberships"].delete_many({"seasonId": oid})
-    db["seasons"].delete_one({"_id": oid})
+    sid = _int_id(season_id, "season_id")
+    with get_conn() as conn:
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("DELETE FROM team_memberships WHERE season_id = %s", (sid,))
+                cur.execute("DELETE FROM seasons WHERE id = %s", (sid,))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
     return {"ok": True}
 
 
 # ---------- conferences ----------
 
 @router.get("/conferences", dependencies=[Depends(require_admin)])
-def list_conferences(
-    orgId: Optional[str] = None,
-    q: str = Query("", max_length=100),
-    limit: int = 100,
-):
-    db = _db()
-    flt: dict[str, Any] = {}
-    if orgId:
-        flt["orgId"] = _oid(orgId)
-    if q:
-        flt["name"] = {"$regex": re.escape(q), "$options": "i"}
-    rows = list(db["conferences"].find(flt).sort([("tier", 1), ("name", 1)]).limit(limit))
-    return [_doc(r) for r in rows]
+def list_conferences(orgId: Optional[str] = None, q: str = Query("", max_length=100), limit: int = Query(100, ge=1, le=500)):
+    oid = _int_id(orgId, "orgId") if orgId else None
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT * FROM conferences "
+            "WHERE (%s::bigint IS NULL OR org_id = %s::bigint) "
+            "  AND (%s::text IS NULL OR name ILIKE %s) "
+            "ORDER BY tier NULLS LAST, name LIMIT %s",
+            (oid, oid, q or None, f"%{q}%", limit),
+        )
+        rows = cur.fetchall()
+    return [_shape_conference(r) for r in rows]
 
 
 @router.post("/conferences", dependencies=[Depends(require_admin)])
 def create_conference(req: ConferenceCreate):
-    db = _db()
-    org = db["organizations"].find_one({"_id": _oid(req.orgId)})
-    if not org:
-        raise HTTPException(404, "Organization not found")
+    oid = _int_id(req.orgId, "orgId")
     name = req.name.strip()
     if not name:
         raise HTTPException(400, "name required")
-    slug = _slugify(f"{req.tier or ''} {name}".strip())
-    existing = db["conferences"].find_one({"orgId": org["_id"], "slug": slug})
-    if existing:
-        return _doc(existing)
-    doc = {
-        "orgId": org["_id"],
-        "name": name,
-        "shortName": (req.shortName or name).strip(),
-        "slug": slug,
-        "tier": (req.tier or "").strip() or None,
-        "kind": req.kind,
-        "createdAt": datetime.now(timezone.utc).isoformat(),
-    }
-    res = db["conferences"].insert_one(doc)
-    doc["_id"] = res.inserted_id
-    return _doc(doc)
+    slug_input = f"{(req.tier or '').strip()} {name}".strip()
+    slug = _slugify(slug_input)
+    with get_cursor() as cur:
+        cur.execute("SELECT * FROM organizations WHERE id = %s", (oid,))
+        if not cur.fetchone():
+            raise HTTPException(404, "Organization not found")
+        cur.execute("SELECT * FROM conferences WHERE org_id = %s AND slug = %s", (oid, slug))
+        existing = cur.fetchone()
+        if existing:
+            return _shape_conference(existing)
+        cur.execute(
+            "INSERT INTO conferences (org_id, name, short_name, slug, tier, kind) "
+            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING *",
+            (oid, name, (req.shortName or name).strip(), slug, (req.tier or "").strip() or None, req.kind),
+        )
+        row = cur.fetchone()
+    return _shape_conference(row)
 
 
 @router.patch("/conferences/{conf_id}", dependencies=[Depends(require_admin)])
 def update_conference(conf_id: str, req: ConferenceUpdate):
-    db = _db()
-    oid = _oid(conf_id)
-    conf = db["conferences"].find_one({"_id": oid})
-    if not conf:
-        raise HTTPException(404, "Conference not found")
-    update: dict[str, Any] = {}
-    if req.name is not None:
-        update["name"] = req.name.strip()
-    if req.shortName is not None:
-        update["shortName"] = req.shortName.strip()
-    if req.tier is not None:
-        update["tier"] = req.tier.strip() or None
-    if req.kind is not None:
-        update["kind"] = req.kind
-    # rebuild slug if name or tier changed
-    if "name" in update or "tier" in update:
-        new_name = update.get("name", conf["name"])
-        new_tier = update.get("tier", conf.get("tier"))
-        update["slug"] = _slugify(f"{new_tier or ''} {new_name}".strip())
-    if update:
-        db["conferences"].update_one({"_id": oid}, {"$set": update})
-    return _doc(db["conferences"].find_one({"_id": oid}) or {})
+    cid = _int_id(conf_id, "conf_id")
+    with get_conn() as conn:
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM conferences WHERE id = %s", (cid,))
+                conf = cur.fetchone()
+                if not conf:
+                    raise HTTPException(404, "Conference not found")
+                sets: list[str] = []
+                params: list[Any] = []
+                new_name = conf["name"]
+                new_tier = conf.get("tier")
+                if req.name is not None:
+                    new_name = req.name.strip()
+                    sets.append("name = %s"); params.append(new_name)
+                if req.shortName is not None:
+                    sets.append("short_name = %s"); params.append(req.shortName.strip())
+                if req.tier is not None:
+                    new_tier = req.tier.strip() or None
+                    sets.append("tier = %s"); params.append(new_tier)
+                if req.kind is not None:
+                    sets.append("kind = %s"); params.append(req.kind)
+                if req.name is not None or req.tier is not None:
+                    new_slug = _slugify(f"{new_tier or ''} {new_name}".strip())
+                    sets.append("slug = %s"); params.append(new_slug)
+                if sets:
+                    cur.execute(f"UPDATE conferences SET {', '.join(sets)} WHERE id = %s", (*params, cid))
+                cur.execute("SELECT * FROM conferences WHERE id = %s", (cid,))
+                row = cur.fetchone()
+            conn.commit()
+        except HTTPException:
+            conn.rollback()
+            raise
+        except Exception:
+            conn.rollback()
+            raise
+    return _shape_conference(row)
 
 
 @router.delete("/conferences/{conf_id}", dependencies=[Depends(require_admin)])
 def delete_conference(conf_id: str):
-    db = _db()
-    oid = _oid(conf_id)
-    db["team_memberships"].delete_many({"conferenceId": oid})
-    db["conferences"].delete_one({"_id": oid})
+    cid = _int_id(conf_id, "conf_id")
+    with get_conn() as conn:
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("DELETE FROM team_memberships WHERE conference_id = %s", (cid,))
+                cur.execute("DELETE FROM conferences WHERE id = %s", (cid,))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
     return {"ok": True}
 
 
@@ -1117,110 +946,117 @@ def list_memberships(
     conferenceId: Optional[str] = None,
     seasonId: Optional[str] = None,
     active: Optional[bool] = None,
-    limit: int = 200,
+    limit: int = Query(200, ge=1, le=1000),
 ):
-    """List memberships, denormalizing org/season/conference names for UI display."""
-    db = _db()
-    flt: dict[str, Any] = {}
-    if teamId:
-        flt["teamId"] = _oid(teamId)
-    if conferenceId:
-        flt["conferenceId"] = _oid(conferenceId)
-    if seasonId:
-        flt["seasonId"] = _oid(seasonId)
-    if active is not None:
-        flt["active"] = active
-    rows = list(db["team_memberships"].find(flt).limit(limit))
-
-    # Fetch referenced seasons/conferences in bulk for labels.
-    season_ids = list({r["seasonId"] for r in rows})
-    conf_ids = list({r["conferenceId"] for r in rows})
-    team_ids = list({r["teamId"] for r in rows})
-    seasons = {s["_id"]: s for s in db["seasons"].find({"_id": {"$in": season_ids}})}
-    confs = {c["_id"]: c for c in db["conferences"].find({"_id": {"$in": conf_ids}})}
-    teams = {t["_id"]: t for t in db["teams"].find({"_id": {"$in": team_ids}})}
-    org_ids = list({c.get("orgId") for c in confs.values() if c.get("orgId")})
-    orgs = {o["_id"]: o for o in db["organizations"].find({"_id": {"$in": org_ids}})}
-
-    out = []
-    for r in rows:
-        d = _doc(r)
-        s = seasons.get(r["seasonId"])
-        c = confs.get(r["conferenceId"])
-        t = teams.get(r["teamId"])
-        org = orgs.get(c.get("orgId")) if c else None
-        d["seasonLabel"] = s.get("label") if s else None
-        d["conferenceName"] = c.get("name") if c else None
-        d["conferenceTier"] = c.get("tier") if c else None
-        d["orgAbbreviation"] = org.get("abbreviation") if org else None
-        d["teamName"] = t.get("teamName") if t else None
-        out.append(d)
-    return out
+    t_id = _int_id(teamId, "teamId") if teamId else None
+    c_id = _int_id(conferenceId, "conferenceId") if conferenceId else None
+    s_id = _int_id(seasonId, "seasonId") if seasonId else None
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT tm.*, "
+            "       s.label AS season_label, "
+            "       c.name AS conference_name, "
+            "       c.tier AS conference_tier, "
+            "       o.abbreviation AS org_abbreviation, "
+            "       t.name AS team_name_alias "
+            "FROM team_memberships tm "
+            "JOIN seasons s ON s.id = tm.season_id "
+            "JOIN conferences c ON c.id = tm.conference_id "
+            "LEFT JOIN organizations o ON o.id = c.org_id "
+            "LEFT JOIN teams t ON t.id = tm.team_id "
+            "WHERE (%s::bigint IS NULL OR tm.team_id = %s::bigint) "
+            "  AND (%s::bigint IS NULL OR tm.conference_id = %s::bigint) "
+            "  AND (%s::bigint IS NULL OR tm.season_id = %s::bigint) "
+            "  AND (%s::boolean IS NULL OR tm.active = %s::boolean) "
+            "LIMIT %s",
+            (t_id, t_id, c_id, c_id, s_id, s_id, active, active, limit),
+        )
+        rows = cur.fetchall()
+    return [_shape_membership(r) for r in rows]
 
 
 @router.post("/memberships", dependencies=[Depends(require_admin)])
 def create_membership(req: MembershipCreate):
-    db = _db()
-    team = db["teams"].find_one({"_id": _oid(req.teamId)})
-    conf = db["conferences"].find_one({"_id": _oid(req.conferenceId)})
-    season = db["seasons"].find_one({"_id": _oid(req.seasonId)})
-    if not team or not conf or not season:
-        raise HTTPException(404, "team / conference / season not found")
-    if conf["orgId"] != season["orgId"]:
-        raise HTTPException(400, "conference and season must belong to the same org")
-    doc = {
-        "teamId": team["_id"],
-        "conferenceId": conf["_id"],
-        "seasonId": season["_id"],
-        "active": req.active,
-        "createdAt": datetime.now(timezone.utc).isoformat(),
-    }
-    try:
-        res = db["team_memberships"].insert_one(doc)
-    except DuplicateKeyError:
-        existing = db["team_memberships"].find_one({
-            "teamId": team["_id"],
-            "conferenceId": conf["_id"],
-            "seasonId": season["_id"],
-        })
-        return _doc(existing or {})
-    doc["_id"] = res.inserted_id
-    return _doc(doc)
+    tid = _int_id(req.teamId, "teamId")
+    cid = _int_id(req.conferenceId, "conferenceId")
+    sid = _int_id(req.seasonId, "seasonId")
+    with get_cursor() as cur:
+        cur.execute("SELECT * FROM teams WHERE id = %s", (tid,))
+        if not cur.fetchone():
+            raise HTTPException(404, "Team not found")
+        cur.execute("SELECT * FROM conferences WHERE id = %s", (cid,))
+        conf = cur.fetchone()
+        if not conf:
+            raise HTTPException(404, "Conference not found")
+        cur.execute("SELECT * FROM seasons WHERE id = %s", (sid,))
+        season = cur.fetchone()
+        if not season:
+            raise HTTPException(404, "Season not found")
+        if conf["org_id"] != season["org_id"]:
+            raise HTTPException(400, "conference and season must belong to the same org")
+        cur.execute(
+            "SELECT * FROM team_memberships "
+            "WHERE team_id = %s AND conference_id = %s AND season_id = %s",
+            (tid, cid, sid),
+        )
+        existing = cur.fetchone()
+        if existing:
+            return _shape_membership(existing)
+        try:
+            cur.execute(
+                "INSERT INTO team_memberships (team_id, conference_id, season_id, active) "
+                "VALUES (%s, %s, %s, %s) RETURNING *",
+                (tid, cid, sid, req.active),
+            )
+            row = cur.fetchone()
+        except UniqueViolation:
+            raise HTTPException(409, "Membership already exists")
+    return _shape_membership(row)
 
 
 @router.patch("/memberships/{membership_id}", dependencies=[Depends(require_admin)])
 def update_membership(membership_id: str, req: MembershipUpdate):
-    db = _db()
-    oid = _oid(membership_id)
-    db["team_memberships"].update_one({"_id": oid}, {"$set": {"active": req.active}})
-    return _doc(db["team_memberships"].find_one({"_id": oid}) or {})
+    mid = _int_id(membership_id, "membership_id")
+    with get_cursor() as cur:
+        cur.execute("UPDATE team_memberships SET active = %s WHERE id = %s", (req.active, mid))
+        cur.execute("SELECT * FROM team_memberships WHERE id = %s", (mid,))
+        row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "Membership not found")
+    return _shape_membership(row)
 
 
 @router.delete("/memberships/{membership_id}", dependencies=[Depends(require_admin)])
 def delete_membership(membership_id: str):
-    db = _db()
-    db["team_memberships"].delete_one({"_id": _oid(membership_id)})
+    mid = _int_id(membership_id, "membership_id")
+    with get_cursor() as cur:
+        cur.execute("DELETE FROM team_memberships WHERE id = %s", (mid,))
     return {"ok": True}
 
 
-# ---------- hierarchy tree (for /admin/leagues UI) ----------
+# ---------- leagues tree (nested orgs + seasons + conferences) ----------
 
 @router.get("/leagues-tree", dependencies=[Depends(require_admin)])
 def leagues_tree():
-    """Return orgs with their seasons and conferences nested for the management UI."""
-    db = _db()
-    orgs = list(db["organizations"].find({}).sort("abbreviation", 1))
+    with get_cursor() as cur:
+        cur.execute("SELECT * FROM organizations ORDER BY abbreviation")
+        orgs = cur.fetchall()
+        cur.execute("SELECT * FROM seasons ORDER BY org_id, year DESC, semester")
+        all_seasons = cur.fetchall()
+        cur.execute("SELECT * FROM conferences ORDER BY org_id, tier NULLS LAST, name")
+        all_confs = cur.fetchall()
+    by_org_seasons: dict[int, list[dict]] = {}
+    for s in all_seasons:
+        by_org_seasons.setdefault(s["org_id"], []).append(_shape_season(s))
+    by_org_confs: dict[int, list[dict]] = {}
+    for c in all_confs:
+        by_org_confs.setdefault(c["org_id"], []).append(_shape_conference(c))
     out = []
     for o in orgs:
-        seasons = list(
-            db["seasons"].find({"orgId": o["_id"]}).sort([("year", -1), ("semester", 1)])
-        )
-        confs = list(
-            db["conferences"].find({"orgId": o["_id"]}).sort([("tier", 1), ("name", 1)])
-        )
+        oid = o["id"]
         out.append({
-            **_doc(o),
-            "seasons": [_doc(s) for s in seasons],
-            "conferences": [_doc(c) for c in confs],
+            **_shape_org(o),
+            "seasons":     by_org_seasons.get(oid, []),
+            "conferences": by_org_confs.get(oid, []),
         })
     return out
