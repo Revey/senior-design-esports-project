@@ -42,9 +42,10 @@ export default function RSOAuthPage() {
         <section style={styles.card}>
           <h2 style={styles.sectionTitle}>Connect Your Riot Account</h2>
           <p style={styles.text}>
-            Linking your Riot account allows CSU Esports Hub to track your CVAL match history
-            including custom games. This enables us to display accurate stats for collegiate
-            league matches that are not tracked by public APIs.
+            Linking your Riot account lets Campus Rankers track your collegiate match
+            history (including custom games used by college leagues), and is also how
+            you grant consent to appear on the public site. Sign-in is the consent —
+            without it, your profile stays private.
           </p>
           <ul style={styles.list}>
             <li>We only access match history data</li>

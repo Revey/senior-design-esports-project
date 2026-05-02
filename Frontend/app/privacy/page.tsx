@@ -10,10 +10,11 @@ export default function PrivacyPolicyPage() {
         <section style={styles.card}>
           <h2 style={styles.sectionTitle}>Overview</h2>
           <p style={styles.text}>
-            CollegeRankers (&quot;we&quot;, &quot;our&quot;, &quot;the platform&quot;) is a collegiate
-            esports analytics tool built by students at Cleveland State University. This privacy
-            policy explains how we collect, use, and protect data obtained through our integration
-            with the Riot Games API and Riot Sign On (RSO).
+            Campus Rankers (&quot;we&quot;, &quot;our&quot;, &quot;the platform&quot;) is a
+            collegiate esports stats site for Valorant and League of Legends — modeled after
+            vlr.gg for the college scene. This privacy policy explains how we collect, use, and
+            protect data obtained through our integration with the Riot Games API and Riot
+            Sign-On (RSO).
           </p>
         </section>
 
@@ -46,8 +47,8 @@ export default function PrivacyPolicyPage() {
         <section style={styles.card}>
           <h2 style={styles.sectionTitle}>How We Use Your Data</h2>
           <ul style={styles.list}>
-            <li>Display individual and team performance statistics for CSU esports teams</li>
-            <li>Track CVAL (College VALORANT) match results and trends</li>
+            <li>Display individual and team performance statistics for collegiate teams</li>
+            <li>Track CVAL, CLOL, NACE, NECC, and ECAC match results and trends</li>
             <li>Help players and coaches analyze gameplay for improvement</li>
             <li>Aggregate team-level statistics (win rates, map performance, etc.)</li>
           </ul>
@@ -66,12 +67,14 @@ export default function PrivacyPolicyPage() {
               processed on their servers.
             </li>
             <li>
-              <strong>MongoDB Atlas</strong> &mdash; OAuth tokens and cached match data are stored in a
-              secure MongoDB Atlas database with encryption at rest and in transit.
+              <strong>DigitalOcean Managed PostgreSQL</strong> &mdash; OAuth tokens and stats data
+              are stored in a managed Postgres cluster with TLS-required connections and
+              encryption at rest.
             </li>
             <li>
-              <strong>Netlify</strong> &mdash; Our frontend is hosted on Netlify. Netlify may collect
-              standard web analytics (IP addresses, browser type) as described in their privacy policy.
+              <strong>DigitalOcean App Platform</strong> &mdash; The site is hosted on DigitalOcean.
+              Standard web traffic logs (IP, browser type) may be collected as described in their
+              privacy policy.
             </li>
           </ul>
         </section>
@@ -123,9 +126,8 @@ export default function PrivacyPolicyPage() {
         <section style={styles.card}>
           <h2 style={styles.sectionTitle}>Contact</h2>
           <p style={styles.text}>
-            For questions about this privacy policy or to request data deletion, contact
-            the CSU Esports team through Cleveland State University&apos;s Washkewicz College
-            of Engineering.
+            For questions about this privacy policy or to request data deletion, reach out
+            via the contact channel listed on the homepage of campusrankers.com.
           </p>
         </section>
       </div>

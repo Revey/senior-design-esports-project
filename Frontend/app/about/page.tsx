@@ -1,22 +1,15 @@
 import type { CSSProperties } from "react";
 
-const CSU_VALORANT_ROSTER = [
-  { ign: "N0ths",       name: "Ashton Langenek",  role: "Controller", major: "Information Systems" },
-  { ign: "Kamino",      name: "Connor Maluk",     role: "Controller", major: "Social Studies Education" },
-  { ign: "wyyu",        name: "Eric Weatherall",  role: "Duelist",    major: "Business Sports Mgmt" },
-  { ign: "Revey",       name: "Daniel Torres",    role: "Duelist",    major: "Computer Science" },
-  { ign: "Exquisitely", name: "Ziyeir Norman",    role: "Sentinel",   major: "Chemical Engineering" },
-];
-
 export default function AboutPage() {
   return (
     <main style={styles.container}>
       <div style={styles.content}>
         {/* Hero */}
         <section style={styles.hero}>
-          <h1 style={styles.heroTitle}>CSU Esports Hub</h1>
+          <h1 style={styles.heroTitle}>Campus Rankers</h1>
           <p style={styles.heroSubtitle}>
-            The official data portal for Cleveland State University competitive esports
+            Rankings, rosters, and match history for collegiate Valorant and
+            League of Legends — across CVAL, CLOL, NACE, NECC, ECAC and more.
           </p>
         </section>
 
@@ -24,115 +17,118 @@ export default function AboutPage() {
         <section style={styles.card}>
           <h2 style={styles.sectionTitle}>Our Mission</h2>
           <p style={styles.text}>
-            CSU Esports Hub tracks Cleveland State University student-athletes competing in
-            <strong> College VALORANT (CVAL)</strong> and <strong>College League of Legends (CLOL)</strong>.
-            Built in partnership with the Washkewicz College of Engineering, this platform provides
-            comprehensive performance analytics for our competitive teams.
+            Campus Rankers is a public stats site for the collegiate
+            <strong> Valorant (CVAL)</strong> and <strong>League of Legends (CLOL)</strong>{" "}
+            scenes — modeled on what vlr.gg does for pro Valorant. Teams, players,
+            schools, conferences, and seasons are all surfaced here so fans can
+            follow their school and players can scout opponents.
           </p>
           <p style={styles.text}>
-            Many of our players are STEM students who balance rigorous academic programs with
-            competitive gaming. This hub celebrates their achievements and provides transparent
-            statistics for fans, recruiters, and the esports community.
+            More games (Rocket League, Overwatch, Smash, TFT, and others) are
+            on the roadmap as the data shape for each is researched and added.
           </p>
         </section>
 
         {/* How RSO Works */}
         <section style={styles.card}>
-          <h2 style={styles.sectionTitle}>How Riot Sign On Works</h2>
+          <h2 style={styles.sectionTitle}>How Riot Sign-On Works (and why)</h2>
           <p style={styles.text}>
-            To access custom game match history (essential for collegiate league tracking), players
-            authenticate via Riot Sign On (RSO). Here's how it works:
+            Player profiles default to private. Riot Sign-On (RSO) is the act
+            of consent that flips a profile public:
           </p>
           <ol style={styles.orderedList}>
             <li>
-              <strong>Connect Account</strong> - Player clicks "Connect Riot Account" on the stats page
+              <strong>Connect Account</strong> — click <em>Connect Riot</em> in
+              the navbar and you're redirected to Riot to authorize.
             </li>
             <li>
-              <strong>Authenticate</strong> - Player is redirected to Riot Games to authorize access
+              <strong>Permission Granted</strong> — Campus Rankers receives
+              read-only access to your match history, including the custom games
+              that collegiate leagues use but Riot's public APIs don't expose.
             </li>
             <li>
-              <strong>Permission Granted</strong> - Hub receives permission to read match history including custom games
+              <strong>Profile Goes Public</strong> — your sign-in is your
+              consent to display your in-game name, school, team association,
+              and stats on the public site.
             </li>
             <li>
-              <strong>Stats Sync</strong> - CVAL and CLOL match data syncs automatically within 24 hours
+              <strong>Revoke Anytime</strong> — you can revoke consent from
+              your account page; your profile drops back to private immediately,
+              with full audit history kept.
             </li>
           </ol>
           <div style={styles.privacyNote}>
-            <strong>Privacy Note:</strong> We only access match history data. We never access account
-            credentials, payment information, or personal data beyond what is needed for stats display.
+            <strong>Privacy:</strong> we only read match history. Never
+            credentials, never payment data, never private messages. The
+            consent gate is enforced at the database layer — non-consented
+            players are never returned by the public API.
           </div>
         </section>
 
         {/* Leagues */}
         <section style={styles.card}>
-          <h2 style={styles.sectionTitle}>Leagues We Track</h2>
+          <h2 style={styles.sectionTitle}>Leagues we track</h2>
           <div style={styles.leagueGrid}>
             <div style={{ ...styles.leagueCard, borderColor: "#ff4655" }}>
               <h3 style={{ ...styles.leagueName, color: "#ff4655" }}>CVAL</h3>
               <p style={styles.leagueDesc}>
-                College VALORANT is the premier collegiate VALORANT league, featuring top university
-                teams competing in organized seasonal play with professional production standards.
+                College VALORANT — the flagship collegiate Val league, top
+                university teams in organized seasonal play with professional
+                production.
               </p>
             </div>
             <div style={{ ...styles.leagueCard, borderColor: "#c89b3c" }}>
               <h3 style={{ ...styles.leagueName, color: "#c89b3c" }}>CLOL</h3>
               <p style={styles.leagueDesc}>
-                College League of Legends Championship is the official collegiate league for
-                League of Legends, sanctioned by Riot Games with scholarship opportunities.
+                College League of Legends Championship — Riot-sanctioned
+                collegiate LoL with scholarship opportunities.
               </p>
             </div>
-          </div>
-        </section>
-
-        {/* Roster */}
-        <section style={styles.card}>
-          <h2 style={styles.sectionTitle}>CSU Valorant Roster</h2>
-          <div style={styles.tableWrapper}>
-            <div style={styles.table}>
-              <div style={{ ...styles.tableRow, ...styles.tableHeader }}>
-                <div>IGN</div>
-                <div>Name</div>
-                <div>Role</div>
-                <div>Major</div>
-              </div>
-              {CSU_VALORANT_ROSTER.map((player) => (
-                <div key={player.ign} className="data-row" style={styles.tableRow}>
-                  <div style={{ fontWeight: 600 }}>{player.ign}</div>
-                  <div>{player.name}</div>
-                  <div style={{ opacity: 0.9 }}>{player.role}</div>
-                  <div style={{ opacity: 0.85 }}>{player.major}</div>
-                </div>
-              ))}
+            <div style={{ ...styles.leagueCard, borderColor: "#5cd0a8" }}>
+              <h3 style={{ ...styles.leagueName, color: "#5cd0a8" }}>NACE</h3>
+              <p style={styles.leagueDesc}>
+                National Association of Collegiate Esports — multi-game
+                conferences (Premier, Plus, D1–D10) covering Val, LoL, and more.
+              </p>
+            </div>
+            <div style={{ ...styles.leagueCard, borderColor: "#9aa6ff" }}>
+              <h3 style={{ ...styles.leagueName, color: "#9aa6ff" }}>NECC, ECAC, others</h3>
+              <p style={styles.leagueDesc}>
+                Regional and conference-level collegiate leagues. Schools
+                participate across multiple orgs; we track them all.
+              </p>
             </div>
           </div>
         </section>
 
         {/* Data Privacy */}
         <section style={styles.card}>
-          <h2 style={styles.sectionTitle}>Data Privacy</h2>
+          <h2 style={styles.sectionTitle}>Data privacy</h2>
           <div style={styles.privacyGrid}>
             <div style={styles.privacyColumn}>
-              <h4 style={styles.privacyHeading}>What We Collect</h4>
+              <h4 style={styles.privacyHeading}>What we collect (after RSO consent)</h4>
               <ul style={styles.list}>
                 <li>Match history and performance statistics</li>
-                <li>In-game name (Riot ID)</li>
+                <li>In-game name (Riot ID) and PUUID</li>
                 <li>Team affiliation and role</li>
-                <li>Aggregate performance metrics (K/D, ACS, etc.)</li>
+                <li>Aggregate metrics (K/D, ACS, CS, gold, etc.)</li>
               </ul>
             </div>
             <div style={styles.privacyColumn}>
-              <h4 style={styles.privacyHeading}>What We Never Access</h4>
+              <h4 style={styles.privacyHeading}>What we never access</h4>
               <ul style={styles.list}>
                 <li>Account passwords or credentials</li>
                 <li>Payment or billing information</li>
                 <li>Personal contact information</li>
                 <li>Private messages or social features</li>
-                <li>Data from non-collegiate matches (unless public)</li>
+                <li>Data from non-collegiate matches (beyond public match metadata)</li>
               </ul>
             </div>
           </div>
           <p style={{ ...styles.text, marginTop: "1rem", opacity: 0.7 }}>
-            Players can revoke access at any time via their Riot Games account settings.
+            Revoke consent anytime — your profile disappears from public listings
+            immediately. Stored tokens are removed on the Riot Games side via
+            your account settings.
           </p>
         </section>
       </div>

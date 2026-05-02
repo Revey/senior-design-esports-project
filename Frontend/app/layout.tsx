@@ -16,14 +16,14 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: {
-    default: "CollegeRankers — CSU Esports Hub",
-    template: "%s | CollegeRankers",
+    default: "Campus Rankers — Collegiate Esports Stats",
+    template: "%s | Campus Rankers",
   },
-  description: "Collegiate esports stats for Cleveland State University. Track Valorant and League of Legends teams, players, and tournament results.",
+  description: "Collegiate Valorant and League of Legends — rankings, rosters, match history, and per-player stats across CVAL, CLOL, NACE, and more.",
   openGraph: {
-    title: "CollegeRankers — CSU Esports Hub",
-    description: "Collegiate esports stats for Cleveland State University.",
-    siteName: "CollegeRankers",
+    title: "Campus Rankers — Collegiate Esports Stats",
+    description: "Collegiate Valorant and League of Legends — rankings, rosters, match history, and per-player stats.",
+    siteName: "Campus Rankers",
     type: "website",
   },
 };

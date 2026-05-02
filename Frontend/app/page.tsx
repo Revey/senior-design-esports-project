@@ -39,19 +39,13 @@ export default function Home() {
       <div className="home-grain" aria-hidden="true" />
 
       <div className="home-content">
-        <span className="home-eyebrow">
-          <span className="home-eyebrow-dot" aria-hidden="true" />
-          Cleveland State Esports · Season 2026
-        </span>
-
         <h1 className="home-heading">
           Choose your <em>arena</em>.
         </h1>
 
         <p className="home-sub">
-          Rankings, rosters, and match history for CSU&apos;s competitive
-          Valorant and League of Legends programs — updated after every
-          collegiate matchday.
+          Rankings, rosters, and match history for collegiate Valorant and
+          League of Legends programs — updated after every matchday.
         </p>
 
         <div className="home-cascade">

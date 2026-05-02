@@ -642,7 +642,7 @@ function TeamPicker(p: TeamPickerProps) {
             Team at {p.school.name}
           </label>
           <Typeahead<Team>
-            placeholder="e.g. CSU Vikes Green"
+            placeholder="e.g. NEU Valorant Red"
             value={p.teamQ}
             onChange={p.setTeamQ}
             fetcher={p.fetchTeamsForSchool(p.school._id)}

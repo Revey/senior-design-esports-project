@@ -6,10 +6,10 @@ import Link from "next/link";
 import Image from "next/image";
 
 const navItems = [
-  { label: "StratOS", href: "https://c9-stratos.vercel.app/", external: true },
   // /leagues removed pending rewrite against the new org/conference hierarchy
   // (Phase 3a deleted the underlying /api/leagues endpoint). The route file
   // still exists; direct URLs render a graceful "Failed to load" state.
+  // StratOS link removed — was a temporary external promo.
   { label: "Teams", href: "/teams" },
   { label: "Players", href: "/players" },
   { label: "Matches", href: "/matches" },
@@ -52,7 +52,7 @@ export default function Navbar() {
       <Link href="/" className="navbar-logo-link" aria-label="Home">
         <Image
           src="/images/collegerankericonwhite.png"
-          alt="CollegeEsportsTracker logo"
+          alt="Campus Rankers logo"
           width={38}
           height={38}
           priority
@@ -62,23 +62,7 @@ export default function Navbar() {
       {/* Nav links — absolutely centered in the bar */}
       <nav className="navbar-links" aria-label="Main navigation">
         {navItems.map((item) => {
-          const isActive = !item.external && item.href !== "/" && pathname.startsWith(item.href);
-          const isVCT = item.label === "StratOS";
-
-          if (item.external) {
-            return (
-              <a
-                key={item.label}
-                href={item.href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className={`navbar-link${isVCT ? " navbar-link--vct" : ""}`}
-              >
-                {item.label}
-              </a>
-            );
-          }
-
+          const isActive = item.href !== "/" && pathname.startsWith(item.href);
           return (
             <Link
               key={item.label}
