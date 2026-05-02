@@ -1,16 +1,21 @@
 # PROGRESS.md — Campus Rankers Hub
 
-**Last Updated:** 2026-05-02
-**Current Phase:** Postgres Migration v2 — **all phases complete on branch; awaiting production cutover** (Phase 6 manual provisioning)
-**Branch:** `postgres-migration-v2` (16 commits ahead of `main`, all pushed; tip `703b633`)
+**Last Updated:** 2026-05-02 (evening — post-audit polish committed)
+**Current Phase:** Postgres Migration v2 — **all code/config complete; awaiting production cutover** (Phase 6 manual provisioning)
+**Branch:** `postgres-migration-v2` (19 commits ahead of `main`, all pushed; tip `99dd534`)
 
 > **Agent Note:** You may autonomously edit this file. Append to ADRs and Graveyard as decisions accumulate. Keep this file as a *concise* state-of-the-world snapshot for AI context. The authoritative changelog lives in git.
 
 ---
 
-## 🟢 Current Status (factual, as of 2026-05-02)
+## 🟢 Current Status (factual, as of 2026-05-02 evening)
 
-The Mongo → Postgres migration is **code-complete on `postgres-migration-v2`**. `main` is still Mongo until the branch merges (post-cutover). Local docker compose stack runs end-to-end on Postgres with skip-count 0 (all routers ported). The branch is ready for production deployment via the runbook at `migrations/postgres-v2/phase-6-RUNBOOK.md`.
+The Mongo → Postgres migration is **code-complete on `postgres-migration-v2`**. `main` is still Mongo until the branch merges (post-cutover). Local docker compose stack runs end-to-end on Postgres with skip-count 0 (all routers ported). After the migration finished, a Playwright + codex + Claude-Sonnet site audit caught a handful of real bugs and stale CSU-era branding — all fixed, all pushed. The branch is ready for production deployment via the runbook at `migrations/postgres-v2/phase-6-RUNBOOK.md`.
+
+**Latest 3 commits (post-migration polish):**
+- `99dd534` — Brand sweep + remove legacy CSU/Vikings demo content (-1440/+115 lines)
+- `0825e19` — Post-audit fixes: 7 of 8 review items
+- `4ddf958` — SDD docs: reflect completed migration on branch
 
 **Application code (on `postgres-migration-v2`):**
 - [x] Frontend Next.js app (teams, players, matches, tournaments, leagues, valorant search, admin panel, about, privacy)
@@ -166,7 +171,56 @@ All phases complete on branch (Phase 6 prep). Production provisioning pending.
 - [x] **Phase 4** — Wire-format reconciliation (camelCase + lowercase enum) (`d29822d`)
 - [x] **Phase 5** — Player accounts + RSO consent gate (`2d20929`)
 - [x] **Phase 6 (prep)** — `.do/app.yaml` + runbook (`703b633`)
+- [x] **Post-audit polish** — Playwright site audit + codex review + Sonnet sub-agent review; 7 fixes (real bugs + polish) at `0825e19`; full brand sweep + legacy CSU demo removal at `99dd534`. See "Post-audit polish" §below.
 - [ ] **Phase 6 (production)** — `doctl apps create --spec .do/app.yaml`, schema apply, secrets, Riot redirect URI, smoke test, PR to main, cutover. **See `migrations/postgres-v2/phase-6-RUNBOOK.md`.**
+
+---
+
+## 🔍 Post-audit polish (2026-05-02 evening)
+
+After the migration code landed, ran a full Playwright site walk + had codex (ChatGPT) and a Claude Sonnet sub-agent independently review the result. Codex verdict: LAUNCH-AFTER-FIXES. Sonnet verdict: LAUNCH-AFTER-NITS. Both agreed the migration was fundamentally sound; both flagged specific issues. All flagged items addressed.
+
+### Real bugs Sonnet caught (fixed in `0825e19`)
+
+1. **`admin_router.create_player` hardcoded `game="valorant"`.** `PlayerCreate` had no `game` field; every LoL player created via admin was silently inserted as Val. Fix: added `game: Literal["valorant","lol"]` to the model + threaded through INSERT + admin/players form gained a Game `<select>`.
+2. **`.do/app.yaml` pinned Postgres `version: "15"`** while local docker runs `postgres:18`. Violated CONSTITUTION's libc-parity rule. Bumped to `"17"` with a comment about overriding to whichever DO actually exposes at provisioning time.
+3. **`ADMIN_SECRET` silent fallback chain.** Defaults to `ADMIN_PASSWORD` then `"dev-insecure-secret"` — fine for local but a footgun for prod. Added module-init warnings (ERROR if unset/equal-to-password/literal-fallback in non-DEBUG environments).
+
+### Audit-flagged display + content gaps (fixed across `0825e19` + `99dd534`)
+
+4. **Brand sweep + remove StratOS** (`99dd534`):
+   - Page `<title>`: `CollegeRankers — CSU Esports Hub` → `Campus Rankers — Collegiate Esports Stats`. OpenGraph + Twitter card metadata updated.
+   - Home hero `Cleveland State Esports · Season 2026` pill **deleted** (option A). Subtitle dropped "CSU's competitive" in favor of "collegiate". Logo alt: `CollegeEsportsTracker logo` → `Campus Rankers logo`.
+   - `/about` page fully rewritten — was CSU-specific with a hardcoded VIKES_GREEN_ROSTER (5 fake players); now describes the national collegiate scope (CVAL, CLOL, NACE, NECC, ECAC) + RSO consent model + multi-game roadmap.
+   - `/privacy` page: CSU + MongoDB Atlas + Netlify references replaced with the actual stack (Postgres on DO App Platform).
+   - `/valorant/auth` subtitle reworded; "Connected Players" hardcoded VIKES roster section already deleted in `0825e19`.
+   - StratOS navbar link removed (was a temporary external promo).
+   - admin/match team-search placeholder: `CSU Vikes Green` → `NEU Valorant Red`.
+
+5. **`/leagues` removed from navbar** — was 404'ing post-Phase-3a (the endpoint was deleted, hierarchy lives at `/api/admin/leagues-tree`). Direct URL still resolves to a graceful "Failed to load" state; the page is just no longer surfaced. A future enhancement could rewrite it as a public org/conference browser.
+
+6. **`formatLabel()` helper** added to `Frontend/app/_shared/gameLabel.ts` — backend now returns canonical lowercase `'bo1'`/`'bo3'`/`'bo5'`; UI displays `BO1`/`BO3`/`BO5`. Applied at the 4 render sites that previously showed raw lowercase.
+
+7. **CONSTITUTION.md §3 stale `players: teamIds[]` corrected.** Replaced with the `team_players` junction table + expanded the data-model summary with all the columns/constraints settled during the migration (rating, region, school_name, partial UNIQUE on player_consents, matches CHECKs, per-game pms_<game>_details tables).
+
+8. **Legacy `/valorant` + `/valorant/stats` routes neutralized** (`99dd534`). The original CSU-era pages had ~1300 lines of hardcoded VIKES player demo data with no DB backing. Replaced both with thin redirects to `/teams` (where real Postgres-backed data lives). `valTeamSearchUtils.ts` deleted entirely.
+
+### Audit artifacts kept locally (gitignored)
+
+- `audit-NN-*.png` screenshots from the Playwright walk (12 pages × 1 home + 1 rebrand verify).
+- `.playwright-mcp/` snapshots and console logs.
+- `/tmp/site-audit-findings.md` — the consolidated audit doc that went to codex and the Sonnet sub-agent.
+
+### Remaining post-launch work surfaced by the audit (not blockers)
+
+- SEO/social metadata sweep: page-specific titles, descriptions, Open Graph cards.
+- Mobile responsive pass on teams/players/matches/admin tables.
+- Accessibility basics: keyboard nav, focus states, aria labels.
+- Error states for API down, missing slugs, 5xx responses.
+- Rate-limit `/api/admin/login` (separate from the global 60/min default).
+- Empty-state copy review across all pages.
+- Rewrite `/leagues` page as a public org/conference browser (or remove the route file).
+- Eventually: rewrite `Backend/valorant/tracker_scraper.py` and `Backend/IngestCVALMatches.py` for Postgres (or remove if RSO-authenticated Riot API access replaces the need).
 
 ---
 
