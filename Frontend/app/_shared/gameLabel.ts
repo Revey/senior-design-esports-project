@@ -24,3 +24,12 @@ export function gameValue(label: string | undefined | null): string {
   if (!label || label === "All") return "";
   return GAME_VALUES[label] ?? label.toLowerCase();
 }
+
+// Match format display: backend returns canonical lowercase 'bo1'/'bo3'/'bo5';
+// UI shows 'BO1'/'BO3'/'BO5'. Pass-through if the value is unrecognized so we
+// don't silently mangle any future formats (e.g. 'bo7').
+export function formatLabel(f: string | undefined | null): string {
+  if (!f) return "";
+  if (f === "bo1" || f === "bo3" || f === "bo5") return f.toUpperCase();
+  return f;
+}

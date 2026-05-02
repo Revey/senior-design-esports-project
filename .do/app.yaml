@@ -8,7 +8,11 @@ databases:
   - name: db
     engine: PG
     production: false  # set true on cutover for HA + backups
-    version: "15"      # DO supports PG 15+; change to "16"/"17" if available
+    # Local docker stack runs postgres:18 (Debian) per CONSTITUTION rule. Match
+    # the major-version here; if DO doesn't yet expose 18 for managed PG, drop
+    # to the highest available (17 or 16) BEFORE cutover and update local
+    # docker-compose.yml in lockstep so glibc/collation parity stays intact.
+    version: "17"
 
 services:
   - name: backend

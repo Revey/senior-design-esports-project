@@ -115,7 +115,7 @@ export default function AdminHome() {
                     <span className="font-medium">{m.team2Name}</span>
                   </div>
                   <div className="text-white/50 text-xs">
-                    {m.game === "valorant" ? "VAL" : "LoL"} · {m.format} ·{" "}
+                    {m.game === "valorant" ? "VAL" : "LoL"} · {(m.format ?? "").toUpperCase()} ·{" "}
                     {m.date ? new Date(m.date).toLocaleDateString() : "—"}
                   </div>
                 </li>

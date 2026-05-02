@@ -39,3 +39,7 @@ __pycache__/
 # Riot API reference docs (kept locally for AI context, not committed)
 /Riot Developer Portal.md
 /riot_content_api_wiki 1.md
+
+# Playwright site-audit artifacts (local-only)
+/.playwright-mcp/
+/audit-*.png

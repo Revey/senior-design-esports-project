@@ -199,6 +199,7 @@ function CreateTeamModal({
           method: "POST",
           body: JSON.stringify({
             displayName: p.displayName.trim(),
+            game,
             riotId: p.riotId.trim() || null,
             role: p.role.trim() || null,
             teamIds: [team._id],

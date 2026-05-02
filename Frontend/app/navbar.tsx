@@ -7,7 +7,9 @@ import Image from "next/image";
 
 const navItems = [
   { label: "StratOS", href: "https://c9-stratos.vercel.app/", external: true },
-  { label: "Leagues", href: "/leagues" },
+  // /leagues removed pending rewrite against the new org/conference hierarchy
+  // (Phase 3a deleted the underlying /api/leagues endpoint). The route file
+  // still exists; direct URLs render a graceful "Failed to load" state.
   { label: "Teams", href: "/teams" },
   { label: "Players", href: "/players" },
   { label: "Matches", href: "/matches" },

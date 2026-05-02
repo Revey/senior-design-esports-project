@@ -4,14 +4,6 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { CSSProperties } from "react";
 
-const CSU_ROSTER = [
-  { ign: "VIKES Lian",        name: "Lian",              role: "Smokes" },
-  { ign: "VIKES N0ths",       name: "Ashton Langenek",   role: "Controller" },
-  { ign: "VIKES Kamino",      name: "Connor Maluk",      role: "Controller" },
-  { ign: "VIKES wyyu",        name: "Eric Weatherall",   role: "Duelist" },
-  { ign: "VIKES Exquisitely", name: "Ziyeir Norman",     role: "Sentinel" },
-];
-
 export default function RSOAuthPage() {
   const router = useRouter();
   const [connected, setConnected] = useState(false);
@@ -91,24 +83,6 @@ export default function RSOAuthPage() {
           )}
         </section>
 
-        {/* Connected Players (Demo) */}
-        <section style={styles.card}>
-          <h2 style={styles.sectionTitle}>Connected Players</h2>
-          <p style={styles.text}>
-            CSU roster players with linked Riot accounts:
-          </p>
-          <div style={styles.rosterGrid}>
-            {CSU_ROSTER.map((player) => (
-              <div key={player.ign} style={styles.playerCard}>
-                <div style={styles.playerCheck}>&#10003;</div>
-                <div>
-                  <div style={styles.playerIGN}>{player.ign}</div>
-                  <div style={styles.playerMeta}>{player.role}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
       </div>
     </main>
   );

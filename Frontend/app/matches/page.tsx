@@ -3,6 +3,7 @@
 import { useEffect, useState, Suspense } from "react";
 import type { CSSProperties } from "react";
 import Link from "next/link";
+import { formatLabel } from "../_shared/gameLabel";
 
 type Match = {
   _id: string;

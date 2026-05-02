@@ -82,17 +82,26 @@ schools             id, name, slug
 organizations       id, name, abbreviation, slug, games[]            -- governs leagues (CVAL/NECC/NACE/ECAC)
 seasons             id, orgId, year, semester, label, active         -- one active=true per org enforced server-side
 conferences         id, orgId, name, shortName, slug, tier?, kind    -- flat with tier label (NACE Premier/Plus)
-teams               id, schoolId, name, slug (unique per (slug,game)), tier, wins, losses, mapWins, mapLosses
-team_memberships    teamId, conferenceId, seasonId, active           -- M2M; kept after teams leave for history
-players             id, name, riot_puuid (UNIQUE), teamIds[], active, stats(JSONB)
-player_consents     playerId, granted_at, revoked_at?                -- RSO grant gates public visibility (Phase 5)
-matches             id, team1_id, team2_id, scores, format, date, conferenceId, seasonId, orgId,
-                    riot_match_id (UNIQUE; sparse for admin matches),
-                    matches_dup_guard UNIQUE (team1_id, team2_id, match_date, game)
-player_match_stats  match_id, player_id, team_id, map_name (NOT NULL DEFAULT '' so unique works for LoL series rows)
-                    pms_unique (match_id, player_id, map_name)
-tournaments         id, ..., teams (JSONB), matches (JSONB)
-rso_tokens          puuid PK, expires_at (tz-aware)
+teams               id, school_id, name, slug (UNIQUE per (slug,game)), game, tier, region,
+                    school_name (denormalized), rating, wins, losses, map_wins, map_losses
+team_memberships    team_id, conference_id, season_id, active         -- M2M; kept after teams leave for history
+team_players        team_id, player_id, season_id, joined_at, left_at?  -- replaces Mongo `teamIds[]` array; per-season rosters
+players             id, name, slug?, display_name, riot_puuid (UNIQUE), riot_id, role, game, active, rating, stats(JSONB)
+player_consents     player_id, granted_at, revoked_at?, riot_puuid    -- RSO grant gates public visibility (Phase 5)
+                    partial UNIQUE (player_id) WHERE revoked_at IS NULL
+matches             id, team1_id, team2_id, team1_score, team2_score, format, match_date, game,
+                    org_id?, season_id?, conference_id?, source ('admin'|'riot'), league_name?,
+                    riot_match_id (partial UNIQUE WHERE NOT NULL),
+                    matches_dup_guard UNIQUE (team1_id, team2_id, match_date, game),
+                    CHECK (team1_id <> team2_id), CHECK (team1_score >= 0), CHECK (team2_score >= 0)
+player_match_stats  id, match_id, player_id, team_id, team_name (denorm), game, map_name (DEFAULT '')
+                    pms_unique (match_id, player_id, map_name)              -- thin polymorphic core
+pms_valorant_details  pms_id (UNIQUE FK ON DELETE CASCADE), kills, deaths, assists, agent (NOT NULL),
+                      acs?, side?, details(JSONB)                          -- 1:1 with pms for Val rows
+pms_lol_details       pms_id (UNIQUE FK ON DELETE CASCADE), kills, deaths, assists, champion (NOT NULL),
+                      cs?, gold?, lane?, details(JSONB)                    -- 1:1 with pms for LoL rows
+tournaments         id, name, slug (UNIQUE), game, start_date, end_date, teams(JSONB), matches(JSONB)
+rso_tokens          puuid PK, access_token, refresh_token?, expires_at (tz-aware)
 ```
 
 **Hard invariants (don't break these):**

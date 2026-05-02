@@ -46,6 +46,30 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", ADMIN_PASSWORD or "dev-insecure-secret")
 TOKEN_TTL_SECONDS = 60 * 60 * 12  # 12h
 
+# Footgun guard: warn loudly if ADMIN_SECRET is unset (or matching the
+# password / dev fallback) in what looks like a non-dev environment. Doesn't
+# block startup — local dev uses these defaults intentionally — but anything
+# with DEBUG=false should be treated as production-shaped.
+if os.getenv("DEBUG", "true").lower() != "true":
+    if not os.getenv("ADMIN_SECRET"):
+        logging.getLogger(__name__).error(
+            "ADMIN_SECRET is not set in a non-DEBUG environment. The HMAC "
+            "token signing key has fallen back to ADMIN_PASSWORD (or "
+            "'dev-insecure-secret' if both are unset). Set ADMIN_SECRET to a "
+            "strong random value (e.g. `openssl rand -hex 32`) before serving "
+            "real traffic.",
+        )
+    elif ADMIN_SECRET == ADMIN_PASSWORD:
+        logging.getLogger(__name__).warning(
+            "ADMIN_SECRET equals ADMIN_PASSWORD. They should be different "
+            "strong values in production.",
+        )
+    elif ADMIN_SECRET == "dev-insecure-secret":
+        logging.getLogger(__name__).error(
+            "ADMIN_SECRET is set to the literal 'dev-insecure-secret'. This "
+            "is the local-dev fallback; real deployments must override it.",
+        )
+
 _VALID_GAMES = {"valorant", "lol"}
 _VALID_SEMESTERS = {"fall", "spring", "summer"}
 
@@ -235,6 +259,7 @@ class TeamCreate(BaseModel):
 
 class PlayerCreate(BaseModel):
     displayName: str
+    game: Literal["valorant", "lol"]
     riotId: Optional[str] = None
     role: Optional[str] = None
     teamIds: list[str] = Field(default_factory=list)
@@ -548,7 +573,7 @@ def create_player(req: PlayerCreate):
                 cur.execute(
                     "INSERT INTO players (name, display_name, riot_id, role, game, active) "
                     "VALUES (%s, %s, %s, %s, %s, %s) RETURNING *",
-                    (name, name, riot_id, role, "valorant", bool(team_ids)),
+                    (name, name, riot_id, role, req.game, bool(team_ids)),
                 )
                 player = cur.fetchone()
 

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import type { CSSProperties } from "react";
+import { formatLabel } from "../../_shared/gameLabel";
 
 type RosterEntry = {
   name?: string;
@@ -226,7 +227,7 @@ export default function TeamProfilePage() {
                       </td>
                       <td style={s.td}>{formatDate(m.date)}</td>
                       <td style={s.td}>{m.opponent ?? "-"}</td>
-                      <td style={s.td}>{m.format ?? "-"}</td>
+                      <td style={s.td}>{m.format ? formatLabel(m.format) : "-"}</td>
                       <td style={s.tdRight} className="tabular-nums">
                         {m.ownScore ?? "-"}<span style={{ opacity: 0.3 }}> - </span>{m.oppScore ?? "-"}
                       </td>

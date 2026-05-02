@@ -23,6 +23,7 @@ export default function PlayersAdmin() {
   const [newName, setNewName] = useState("");
   const [newRiot, setNewRiot] = useState("");
   const [newRole, setNewRole] = useState("");
+  const [newGame, setNewGame] = useState<"valorant" | "lol">("valorant");
 
   useEffect(() => {
     if (!getToken()) router.replace("/admin/login");
@@ -60,6 +61,7 @@ export default function PlayersAdmin() {
       method: "POST",
       body: JSON.stringify({
         displayName: newName.trim(),
+        game: newGame,
         riotId: newRiot.trim() || null,
         role: newRole.trim() || null,
         teamIds: [],
@@ -85,16 +87,24 @@ export default function PlayersAdmin() {
           <h2 className="font-semibold mb-1">Create Player</h2>
           <p className="text-xs text-white/40 mb-3">
             Players here are admin-entered and separate from the public
-            leaderboard data. A player&apos;s game (Valorant or LoL) is
-            determined by the team(s) you link them to.
+            leaderboard data. Pick the game so the player record is created
+            in the correct context — link them to teams below.
           </p>
-          <div className="grid sm:grid-cols-4 gap-2">
+          <div className="grid sm:grid-cols-5 gap-2">
             <input
               placeholder="Display name"
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               className="px-3 py-2 rounded bg-black/40 border border-white/20"
             />
+            <select
+              value={newGame}
+              onChange={(e) => setNewGame(e.target.value as "valorant" | "lol")}
+              className="px-3 py-2 rounded bg-black/40 border border-white/20"
+            >
+              <option value="valorant">Valorant</option>
+              <option value="lol">League of Legends</option>
+            </select>
             <input
               placeholder="Riot ID (Name#TAG)"
               value={newRiot}
