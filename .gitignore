@@ -35,3 +35,7 @@ test.txt
 # Python
 __pycache__/
 *.pyc
+
+# Riot API reference docs (kept locally for AI context, not committed)
+/Riot Developer Portal.md
+/riot_content_api_wiki 1.md
