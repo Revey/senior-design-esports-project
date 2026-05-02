@@ -26,10 +26,6 @@ DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 # Cache (simple in-memory TTL in seconds)
 CACHE_TTL = int(os.getenv("CACHE_TTL", "300"))           # 5 minutes
 
-# MongoDB
-MONGO_URI = os.getenv("MONGO_URI", "")
-MONGO_DB  = os.getenv("MONGO_DB", "senior_design_esports")
-
 # Riot Sign On (RSO) OAuth
 RSO_CLIENT_ID     = os.getenv("RSO_CLIENT_ID", "")
 RSO_CLIENT_SECRET = os.getenv("RSO_CLIENT_SECRET", "")
