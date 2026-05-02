@@ -300,7 +300,7 @@ function PlayerRow({
                 key={t._id}
                 className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-white/10 text-xs"
               >
-                {t.teamName} ({t.game === "Valorant" ? "VAL" : "LoL"})
+                {t.teamName} ({t.game === "valorant" ? "VAL" : "LoL"})
                 <button
                   onClick={() => unlink(t._id)}
                   className="text-red-300 hover:text-red-400"
@@ -322,7 +322,7 @@ function PlayerRow({
               )
             }
             render={(t) =>
-              `${t.teamName} — ${t.school} (${t.game === "Valorant" ? "VAL" : "LoL"})`
+              `${t.teamName} — ${t.school} (${t.game === "valorant" ? "VAL" : "LoL"})`
             }
             onSelect={link}
           />

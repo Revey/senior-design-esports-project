@@ -15,8 +15,8 @@ import {
   type Team,
 } from "../adminClient";
 
-type Game = "Valorant" | "League of Legends";
-type Format = "BO1" | "BO3" | "BO5";
+type Game = "valorant" | "lol";
+type Format = "bo1" | "bo3" | "bo5";
 
 type ValPlayerRow = {
   playerId: string;
@@ -98,8 +98,8 @@ export default function MatchEntryPage() {
   const router = useRouter();
   const [ready, setReady] = useState(false);
 
-  const [game, setGame] = useState<Game>("Valorant");
-  const [format, setFormat] = useState<Format>("BO1");
+  const [game, setGame] = useState<Game>("valorant");
+  const [format, setFormat] = useState<Format>("bo1");
   const [date, setDate] = useState("");
 
   // League hierarchy: Org → Season → Conference
@@ -159,7 +159,7 @@ export default function MatchEntryPage() {
 
   function prefillPlayers(players: Player[], side: "team1" | "team2") {
     const first5 = players.slice(0, 5);
-    if (game === "Valorant") {
+    if (game === "valorant") {
       setMaps((prev) =>
         prev.map((m) => {
           const key = side === "team1" ? "team1Players" : "team2Players";
@@ -295,7 +295,7 @@ export default function MatchEntryPage() {
         seasonId: seasonId || undefined,
         conferenceId: conferenceId || undefined,
       };
-      if (game === "Valorant") {
+      if (game === "valorant") {
         body.maps = maps.map((m) => ({
           mapName: m.mapName,
           team1Score: m.team1Score,
@@ -358,8 +358,8 @@ export default function MatchEntryPage() {
               onChange={(e) => setGame(e.target.value as Game)}
               className="w-full px-3 py-2 rounded bg-black/40 border border-white/20"
             >
-              <option>Valorant</option>
-              <option>League of Legends</option>
+              <option value="valorant">Valorant</option>
+              <option value="lol">League of Legends</option>
             </select>
           </div>
           <div>
@@ -369,9 +369,9 @@ export default function MatchEntryPage() {
               onChange={(e) => setFormat(e.target.value as Format)}
               className="w-full px-3 py-2 rounded bg-black/40 border border-white/20"
             >
-              <option>BO1</option>
-              <option>BO3</option>
-              <option>BO5</option>
+              <option value="bo1">BO1</option>
+              <option value="bo3">BO3</option>
+              <option value="bo5">BO5</option>
             </select>
           </div>
           <div>
@@ -528,7 +528,7 @@ export default function MatchEntryPage() {
           />
         </section>
 
-        {game === "Valorant" ? (
+        {game === "valorant" ? (
           <ValorantMaps
             maps={maps}
             setMaps={setMaps}

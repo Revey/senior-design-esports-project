@@ -52,7 +52,7 @@ export type Team = {
   slug: string;
   school: string;
   schoolId?: string;
-  game: "Valorant" | "League of Legends";
+  game: "valorant" | "lol";
   tier?: string | null;
   wins?: number;
   losses?: number;
@@ -66,7 +66,7 @@ export type Player = {
   active?: boolean;
 };
 
-export type Game = "Valorant" | "League of Legends";
+export type Game = "valorant" | "lol";
 export type Semester = "Fall" | "Spring";
 export type ConfKind = "regional" | "division" | "partner" | "tier";
 

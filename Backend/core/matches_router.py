@@ -22,24 +22,6 @@ from core.db import get_cursor
 
 router = APIRouter()
 
-_GAME_LABEL_TO_DB = {"Valorant": "valorant", "League of Legends": "lol"}
-_GAME_DB_TO_LABEL = {v: k for k, v in _GAME_LABEL_TO_DB.items()}
-
-
-def _normalize_game_filter(label: Optional[str]) -> Optional[str]:
-    if label is None or label == "All":
-        return None
-    if label in _GAME_LABEL_TO_DB:
-        return _GAME_LABEL_TO_DB[label]
-    return label.lower()
-
-
-def _label_game(db_value: Optional[str]) -> str:
-    if db_value is None:
-        return ""
-    return _GAME_DB_TO_LABEL.get(db_value, db_value)
-
-
 def _winner_id(team1_id: int, team2_id: int, t1_score: Optional[int], t2_score: Optional[int]) -> Optional[str]:
     if t1_score is None or t2_score is None or t1_score == t2_score:
         return None
@@ -49,7 +31,7 @@ def _winner_id(team1_id: int, team2_id: int, t1_score: Optional[int], t2_score: 
 def _list_row_to_response(row: dict) -> dict:
     return {
         "_id":          str(row["id"]),
-        "game":         _label_game(row.get("game")),
+        "game":         row.get("game", ""),
         "team1Name":    row.get("team1_name") or "",
         "team2Name":    row.get("team2_name") or "",
         "team1Score":   row.get("team1_score"),
@@ -69,7 +51,7 @@ def list_matches(
     limit: int = Query(25, ge=1, le=100),
     page: int = Query(1, ge=1),
 ):
-    db_game = _normalize_game_filter(game)
+    db_game = game if game else None
     db_team: Optional[int] = None
     if team is not None and team != "":
         try:

@@ -11,14 +11,14 @@ type Team = {
   school: string;
   game: string;
   record: TeamRecord;
-  win_rate: number;
+  winRate: number;
   rating: number;
   region: string;
-  league_slug: string;
+  leagueSlug: string;
 };
 
 type GameFilter = "All" | "Valorant" | "League of Legends";
-type SortField = "rating" | "win_rate" | "record.wins";
+type SortField = "rating" | "winRate" | "record.wins";
 
 const GAME_TABS: { label: GameFilter; color: string }[] = [
   { label: "All", color: "#2563eb" },
@@ -47,7 +47,7 @@ function TeamsContent() {
     setError(null);
     setLoaded(false);
     const params = new URLSearchParams({ sort: sortField, order: sortOrder, limit: "50" });
-    if (game !== "All") params.set("game", game);
+    if (game !== "All") params.set("game", game === "Valorant" ? "valorant" : "lol");
 
     fetch(`${API}/api/teams?${params}`)
       .then((r) => {
@@ -129,8 +129,8 @@ function TeamsContent() {
           <div style={{ ...s.statCol, cursor: "pointer" }} onClick={() => toggleSort("record.wins")}>
             Record{sortIndicator("record.wins")}
           </div>
-          <div style={{ ...s.statCol, cursor: "pointer" }} onClick={() => toggleSort("win_rate")}>
-            Win%{sortIndicator("win_rate")}
+          <div style={{ ...s.statCol, cursor: "pointer" }} onClick={() => toggleSort("winRate")}>
+            Win%{sortIndicator("winRate")}
           </div>
           <div style={{ ...s.ratingCol, cursor: "pointer" }} onClick={() => toggleSort("rating")}>
             Rating{sortIndicator("rating")}
@@ -172,17 +172,17 @@ function TeamsContent() {
               <span
                 style={{
                   ...s.gameBadge,
-                  background: t.game === "Valorant" ? "rgba(255,70,85,0.15)" : "rgba(200,155,60,0.15)",
-                  color: t.game === "Valorant" ? "#ff4655" : "#c89b3c",
+                  background: t.game === "valorant" ? "rgba(255,70,85,0.15)" : "rgba(200,155,60,0.15)",
+                  color: t.game === "valorant" ? "#ff4655" : "#c89b3c",
                 }}
               >
-                {t.game === "Valorant" ? "VAL" : "LoL"}
+                {t.game === "valorant" ? "VAL" : "LoL"}
               </span>
             </div>
             <div className="tabular-nums" style={s.statCol}>
               {t.record.wins}-{t.record.losses}
             </div>
-            <div className="tabular-nums" style={s.statCol}>{t.win_rate}%</div>
+            <div className="tabular-nums" style={s.statCol}>{t.winRate}%</div>
             <div className="tabular-nums" style={s.ratingCol}>
               <span style={{ ...s.ratingBadge, color: ratingColor(t.rating) }}>{t.rating}</span>
             </div>

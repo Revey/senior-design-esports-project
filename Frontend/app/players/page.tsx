@@ -10,8 +10,8 @@ type Player = {
   riotId: string;
   role: string | null;
   game: string;
-  team_name: string;
-  team_slug: string;
+  teamName: string;
+  teamSlug: string;
   active: boolean;
 };
 
@@ -45,8 +45,8 @@ function PlayersContent() {
 
     if (game === "All") {
       // Fetch both Valorant and LoL in parallel then merge
-      const valParams = new URLSearchParams({ limit: "200", game: "Valorant" });
-      const lolParams = new URLSearchParams({ limit: "200", game: "League of Legends" });
+      const valParams = new URLSearchParams({ limit: "200", game: "valorant" });
+      const lolParams = new URLSearchParams({ limit: "200", game: "lol" });
 
       Promise.all([
         fetch(`${API}/api/players?${valParams}`).then((r) => {
@@ -91,7 +91,7 @@ function PlayersContent() {
         (p) =>
           p.displayName.toLowerCase().includes(needle) ||
           (p.riotId ?? "").toLowerCase().includes(needle) ||
-          (p.team_name ?? "").toLowerCase().includes(needle)
+          (p.teamName ?? "").toLowerCase().includes(needle)
       )
     : players;
 
@@ -183,7 +183,7 @@ function PlayersContent() {
 
           {/* Rows */}
           {filteredPlayers.map((p, i) => {
-            const isVal = p.game !== "League of Legends";
+            const isVal = p.game !== "lol";
             return (
               <div
                 key={p.slug + i}
@@ -220,7 +220,7 @@ function PlayersContent() {
 
                 {/* Team */}
                 <div style={{ ...s.teamCol, opacity: 0.8 }}>
-                  {p.team_name || "—"}
+                  {p.teamName || "—"}
                 </div>
 
                 {/* Role — show "—" gracefully if not yet assigned */}

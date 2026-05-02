@@ -19,8 +19,8 @@ type RecentMatch = {
   game?: string;
   format?: string;
   opponent?: string;
-  own_score?: number | null;
-  opp_score?: number | null;
+  ownScore?: number | null;
+  oppScore?: number | null;
   win?: boolean | null;
 };
 
@@ -30,13 +30,13 @@ type TeamProfile = {
   school: string;
   game: string;
   record: { wins: number; losses: number };
-  win_rate: number;
+  winRate: number;
   rating: number;
   region: string;
-  league_slug: string;
+  leagueSlug: string;
   roster: RosterEntry[];
-  recent_matches: RecentMatch[];
-  map_record: { wins: number; losses: number };
+  recentMatches: RecentMatch[];
+  mapRecord: { wins: number; losses: number };
 };
 
 const API = (process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000").replace(/\/$/, "");
@@ -97,11 +97,11 @@ export default function TeamProfilePage() {
     );
   }
 
-  const isVal = team.game === "Valorant";
+  const isVal = team.game === "valorant";
   const accent = isVal ? "#ff4655" : "#c89b3c";
-  const hasMapRecord = team.map_record.wins > 0 || team.map_record.losses > 0;
-  const totalMaps = team.map_record.wins + team.map_record.losses;
-  const mapWinRate = totalMaps > 0 ? Math.round((team.map_record.wins / totalMaps) * 1000) / 10 : null;
+  const hasMapRecord = team.mapRecord.wins > 0 || team.mapRecord.losses > 0;
+  const totalMaps = team.mapRecord.wins + team.mapRecord.losses;
+  const mapWinRate = totalMaps > 0 ? Math.round((team.mapRecord.wins / totalMaps) * 1000) / 10 : null;
 
   return (
     <main style={s.container}>
@@ -121,11 +121,11 @@ export default function TeamProfilePage() {
               <span style={{ opacity: 0.8 }}>{team.school}</span>
               <span style={{ opacity: 0.3, margin: "0 0.6rem" }}>·</span>
               <span style={{ opacity: 0.65 }}>{team.region}</span>
-              {team.league_slug && (
+              {team.leagueSlug && (
                 <>
                   <span style={{ opacity: 0.3, margin: "0 0.6rem" }}>·</span>
                   <Link href={`/leagues`} style={{ color: accent, textDecoration: "none", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", fontSize: "0.85rem" }}>
-                    {team.league_slug}
+                    {team.leagueSlug}
                   </Link>
                 </>
               )}
@@ -149,13 +149,13 @@ export default function TeamProfilePage() {
           </div>
           <div style={s.statCell}>
             <div style={s.statLabel}>Win rate</div>
-            <div style={s.statValue} className="tabular-nums">{team.win_rate}%</div>
+            <div style={s.statValue} className="tabular-nums">{team.winRate}%</div>
           </div>
           <div style={s.statCell}>
             <div style={s.statLabel}>Map record</div>
             <div style={s.statValue} className="tabular-nums">
               {hasMapRecord
-                ? <>{team.map_record.wins}<span style={{ opacity: 0.3 }}>-</span>{team.map_record.losses}</>
+                ? <>{team.mapRecord.wins}<span style={{ opacity: 0.3 }}>-</span>{team.mapRecord.losses}</>
                 : <span style={{ opacity: 0.35, fontSize: "1rem" }}>—</span>}
             </div>
           </div>
@@ -202,7 +202,7 @@ export default function TeamProfilePage() {
         {/* Recent matches */}
         <section style={s.card}>
           <h2 style={s.sectionTitle}>Recent matches</h2>
-          {team.recent_matches.length === 0 ? (
+          {team.recentMatches.length === 0 ? (
             <p style={s.emptyText}>No logged matches yet.</p>
           ) : (
             <div style={{ overflowX: "auto" }}>
@@ -217,7 +217,7 @@ export default function TeamProfilePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {team.recent_matches.map((m) => (
+                  {team.recentMatches.map((m) => (
                     <tr key={m.matchId} style={s.tableRow}>
                       <td style={s.td}>
                         <span style={{ ...s.resultPill, background: m.win ? "#22c55e22" : "#ef444422", color: m.win ? "#22c55e" : "#ef4444" }}>
@@ -228,7 +228,7 @@ export default function TeamProfilePage() {
                       <td style={s.td}>{m.opponent ?? "-"}</td>
                       <td style={s.td}>{m.format ?? "-"}</td>
                       <td style={s.tdRight} className="tabular-nums">
-                        {m.own_score ?? "-"}<span style={{ opacity: 0.3 }}> - </span>{m.opp_score ?? "-"}
+                        {m.ownScore ?? "-"}<span style={{ opacity: 0.3 }}> - </span>{m.oppScore ?? "-"}
                       </td>
                     </tr>
                   ))}

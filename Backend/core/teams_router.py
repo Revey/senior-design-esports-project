@@ -1,16 +1,13 @@
-"""API routes for teams (Postgres-backed; Phase 3c of postgres-migration-v2).
+"""API routes for teams (Postgres-backed; Phase 4 wire-format standardized).
 
-Wire contract during Phase 3 (Path A — preserve existing frontend contract):
-  - snake_case for win_rate / league_slug / recent_matches / map_record /
-    own_score / opp_score (matches Frontend/app/teams/{page,[slug]/page}.tsx).
-  - camelCase for matchId, riotId.
-  - game enum mapped at the router boundary: DB stores 'valorant'/'lol' (per
-    Phase 1 schema CHECK constraint); frontend uses 'Valorant'/'League of
-    Legends' display labels. Phase 4 will standardize the frontend to the
-    canonical lowercase form and drop these case-mapping shims.
+Wire format:
+  - Game enum: lowercase 'valorant' / 'lol' on the wire (matches DB).
+  - All response field names: camelCase (winRate, leagueSlug, recentMatches,
+    mapRecord, ownScore, oppScore, teamName, mapWins/Losses).
+  - Frontend handles display-label mapping ('valorant' → 'Valorant' UI label).
 
-The mixed-case shape is intentional Phase-3 backward compat — Phase 4 is the
-wire-format standardization phase.
+The Path A snake_case + TitleCase shims were dropped in Phase 4 once Phase 3
+established the full Postgres surface.
 """
 
 from typing import Any, Optional
@@ -21,64 +18,33 @@ from core.db import get_cursor
 
 router = APIRouter()
 
-_GAME_LABEL_TO_DB = {"Valorant": "valorant", "League of Legends": "lol"}
-_GAME_DB_TO_LABEL = {v: k for k, v in _GAME_LABEL_TO_DB.items()}
+_VALID_GAMES = {"valorant", "lol"}
 
-# Sort whitelist matches the frontend's SortField type exactly:
-#   "rating" | "win_rate" | "record.wins"
-# `name` is NOT included — the frontend never sorts by it.
 _SORT_COLUMNS = {
     "rating":      "rating",
     "record.wins": "wins",
-    "win_rate":    ("CASE WHEN (wins + losses) > 0 "
+    "winRate":     ("CASE WHEN (wins + losses) > 0 "
                     "THEN (wins::float / (wins + losses)) ELSE 0 END"),
 }
 _SORT_ORDERS = {"asc", "desc"}
 
 
-def _normalize_game_filter(label: Optional[str]) -> Optional[str]:
-    """Convert frontend label → DB enum value.
-
-    None / 'All' → no filter (returns None, callers skip the WHERE clause).
-    Known label → mapped lowercase enum.
-    Unknown label → lowercased and passed through. The CHECK constraint on
-        teams.game ensures the SQL returns zero rows. This matches the Mongo
-        router's "filter on this string, get nothing if it doesn't match"
-        behavior rather than silently ignoring the filter.
-    """
-    if label is None or label == "All":
-        return None
-    if label in _GAME_LABEL_TO_DB:
-        return _GAME_LABEL_TO_DB[label]
-    return label.lower()
-
-
-def _label_game(db_value: str) -> str:
-    """Reverse map for response shape: 'valorant' → 'Valorant', etc."""
-    return _GAME_DB_TO_LABEL.get(db_value, db_value)
-
-
 def _team_row_to_response(row: dict) -> dict:
-    """Shape a `teams` row into the existing frontend wire contract.
-
-    Note the snake_case/camelCase mix — that's the existing Mongo contract,
-    preserved here. Phase 4 standardizes.
-    """
     wins = int(row.get("wins") or 0)
     losses = int(row.get("losses") or 0)
     total = wins + losses
     win_rate = round((wins / total) * 100, 1) if total > 0 else 0.0
     rating = row.get("rating")
     return {
-        "slug": row.get("slug", ""),
-        "name": row.get("name", ""),
-        "school": row.get("school_name") or "",
-        "game": _label_game(row.get("game", "")),
-        "record": {"wins": wins, "losses": losses},
-        "win_rate": win_rate,
-        "rating": float(rating) if rating is not None else None,
-        "region": row.get("region") or "",
-        "league_slug": "",
+        "slug":       row.get("slug", ""),
+        "name":       row.get("name", ""),
+        "school":     row.get("school_name") or "",
+        "game":       row.get("game", ""),
+        "record":     {"wins": wins, "losses": losses},
+        "winRate":    win_rate,
+        "rating":     float(rating) if rating is not None else None,
+        "region":     row.get("region") or "",
+        "leagueSlug": "",
     }
 
 
@@ -92,14 +58,14 @@ def _match_row_to_recent(m: dict, own_team_id: int) -> dict:
     else:
         win = own_score > opp_score
     return {
-        "matchId": str(m["id"]),
-        "date": m["match_date"].isoformat() if m.get("match_date") else None,
-        "game": _label_game(m.get("game", "")),
-        "format": m.get("format"),
+        "matchId":  str(m["id"]),
+        "date":     m["match_date"].isoformat() if m.get("match_date") else None,
+        "game":     m.get("game", ""),
+        "format":   m.get("format"),
         "opponent": opp_name or "",
-        "own_score": own_score,
-        "opp_score": opp_score,
-        "win": win,
+        "ownScore": own_score,
+        "oppScore": opp_score,
+        "win":      win,
     }
 
 
@@ -114,10 +80,15 @@ def list_teams(
         raise HTTPException(status_code=400, detail=f"Invalid sort: {sort!r}")
     if order not in _SORT_ORDERS:
         raise HTTPException(status_code=400, detail=f"Invalid order: {order!r}")
+    if game is not None and game != "" and game not in _VALID_GAMES:
+        # Pass-through unknown values; SQL CHECK constraint produces empty
+        # results. Preserves "filter on this string, get nothing if it doesn't
+        # match" behavior.
+        pass
 
     direction = "DESC" if order == "desc" else "ASC"
-    sort_expr = _SORT_COLUMNS[sort]  # whitelisted SQL fragment, never user input
-    db_game = _normalize_game_filter(game)
+    sort_expr = _SORT_COLUMNS[sort]
+    db_game = game if game else None
 
     sql = (
         f"SELECT * FROM teams "
@@ -133,15 +104,9 @@ def list_teams(
 
 @router.get("/{slug}")
 def get_team(slug: str):
-    """Get one team by slug.
-
-    NOTE: teams.slug is UNIQUE only within (slug, game). The frontend detail
-    URL carries no game qualifier, so on the rare collision (slug shared
-    across Valorant + LoL teams) we deterministically return the earlier
-    team (by id ASC). This matches the Mongo router's `find_one` behavior —
-    neither was strictly unambiguous. Phase 4 will switch to game-qualified
-    URLs and remove this caveat.
-    """
+    """Get one team by slug. Slug is unique within (slug, game); on cross-game
+    collision we return the earliest by id ASC. Frontend may switch to
+    game-qualified URLs in a future phase."""
     with get_cursor() as cur:
         cur.execute(
             "SELECT * FROM teams WHERE slug = %s ORDER BY id ASC LIMIT 1",
@@ -178,18 +143,18 @@ def get_team(slug: str):
     response = _team_row_to_response(team)
     response["roster"] = [
         {
-            "name": r["display_name"],
-            "role": r["role"],
+            "name":   r["display_name"],
+            "role":   r["role"],
             "riotId": r["riot_id"],
             "active": r["active"],
         }
         for r in roster_rows
     ]
-    response["recent_matches"] = [
+    response["recentMatches"] = [
         _match_row_to_recent(m, team["id"]) for m in match_rows
     ]
-    response["map_record"] = {
-        "wins": int(team.get("map_wins") or 0),
+    response["mapRecord"] = {
+        "wins":   int(team.get("map_wins") or 0),
         "losses": int(team.get("map_losses") or 0),
     }
     return response

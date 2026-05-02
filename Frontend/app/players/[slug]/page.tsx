@@ -27,14 +27,14 @@ type PlayerProfile = {
   slug: string;
   displayName: string;
   riotId: string;
-  team_name: string;
-  team_slug: string;
+  teamName: string;
+  teamSlug: string;
   game: string;
   role: string;
   active: boolean;
-  recent_matches: MatchStat[];
+  recentMatches: MatchStat[];
   frequency: FrequencyEntry[];
-  frequency_field: "agent" | "champion";
+  frequencyField: "agent" | "champion";
 };
 
 const API = (process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000").replace(/\/$/, "");
@@ -82,7 +82,7 @@ export default function PlayerProfilePage() {
     );
   }
 
-  const isVal = player.game !== "League of Legends";
+  const isVal = player.game !== "lol";
   const accent = isVal ? "#ff4655" : "#c89b3c";
   const maxFreq = player.frequency[0]?.count ?? 1;
 
@@ -114,12 +114,12 @@ export default function PlayerProfilePage() {
                   <span style={{ opacity: 0.3, margin: "0 0.6rem" }}>·</span>
                 </>
               )}
-              {player.team_name ? (
+              {player.teamName ? (
                 <Link
-                  href={`/teams?slug=${player.team_slug}`}
+                  href={`/teams?slug=${player.teamSlug}`}
                   style={{ color: "white", textDecoration: "none", opacity: 0.8 }}
                 >
-                  {player.team_name}
+                  {player.teamName}
                 </Link>
               ) : (
                 <span style={{ opacity: 0.5 }}>No team</span>
@@ -179,7 +179,7 @@ export default function PlayerProfilePage() {
         {/* Recent matches */}
         <section style={s.card}>
           <h2 style={s.sectionTitle}>Recent matches</h2>
-          {player.recent_matches.length === 0 ? (
+          {player.recentMatches.length === 0 ? (
             <p style={s.emptyText}>No logged matches yet.</p>
           ) : (
             <div style={{ overflowX: "auto" }}>
@@ -200,7 +200,7 @@ export default function PlayerProfilePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {player.recent_matches.map((m, i) => (
+                  {player.recentMatches.map((m, i) => (
                     <tr key={`${m.matchId}-${i}`} style={s.tableRow}>
                       <td style={s.td}>
                         <span

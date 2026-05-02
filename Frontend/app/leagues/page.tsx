@@ -5,11 +5,11 @@ import type { CSSProperties } from "react";
 
 type Standing = {
   rank: number;
-  team_name: string;
-  team_slug: string;
+  teamName: string;
+  teamSlug: string;
   wins: number;
   losses: number;
-  win_rate: number;
+  winRate: number;
 };
 
 type League = {
@@ -125,7 +125,7 @@ function LeaguesContent() {
 
             {league.standings.map((st) => (
               <div
-                key={st.team_slug}
+                key={st.teamSlug}
                 className="data-row row-enter"
                 style={{
                   ...s.standingsRow,
@@ -143,17 +143,17 @@ function LeaguesContent() {
                     {st.rank}
                   </span>
                 </div>
-                <div style={{ ...s.teamCol, fontWeight: 600 }}>{st.team_name}</div>
+                <div style={{ ...s.teamCol, fontWeight: 600 }}>{st.teamName}</div>
                 <div className="tabular-nums" style={s.statCol}>{st.wins}</div>
                 <div className="tabular-nums" style={s.statCol}>{st.losses}</div>
                 <div className="tabular-nums" style={s.statCol}>
                   <span
                     style={{
-                      color: st.win_rate >= 60 ? "#22c55e" : st.win_rate >= 50 ? "#eab308" : "#f87171",
+                      color: st.winRate >= 60 ? "#22c55e" : st.winRate >= 50 ? "#eab308" : "#f87171",
                       fontWeight: 600,
                     }}
                   >
-                    {st.win_rate}%
+                    {st.winRate}%
                   </span>
                 </div>
               </div>

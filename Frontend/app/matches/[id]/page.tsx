@@ -206,7 +206,7 @@ function MatchDetailContent() {
 
   if (!match) return null;
 
-  const isVal = match.game === "Valorant";
+  const isVal = match.game === "valorant";
   const gameColor = isVal ? "#ff4655" : "#c89b3c";
   const t1Won = match.winnerTeamId === match.team1Id;
   const leagueLabel = match.leagueName

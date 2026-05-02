@@ -1,15 +1,9 @@
-"""API routes for players (Postgres-backed; Phase 3d of postgres-migration-v2).
+"""API routes for players (Postgres-backed; Phase 4 wire-format standardized).
 
-Wire contract during Phase 3 (Path A — preserve existing frontend contract):
-  - camelCase: displayName, riotId, matchId, mapName, teamName.
-  - snake_case: team_name, team_slug, recent_matches, frequency_field.
-  - TitleCase game enum: 'Valorant' / 'League of Legends' on the wire.
-
-Phase 4 standardizes everything to canonical camelCase + lowercase enum.
-
-The Mongo predecessor split LoL through a separate CLOL_player_stats source.
-The Phase 1 schema unifies both games into a single `players` table
-discriminated by the `game` column. This router collapses the split.
+Wire format:
+  - Game enum: lowercase 'valorant' / 'lol' on the wire.
+  - All response field names: camelCase (displayName, riotId, teamName,
+    teamSlug, recentMatches, frequencyField, mapName, matchId).
 """
 
 from collections import Counter
@@ -21,9 +15,6 @@ from core.db import get_cursor
 
 router = APIRouter()
 
-_GAME_LABEL_TO_DB = {"Valorant": "valorant", "League of Legends": "lol"}
-_GAME_DB_TO_LABEL = {v: k for k, v in _GAME_LABEL_TO_DB.items()}
-
 _SORT_COLUMNS = {
     "displayName": "p.display_name",
     "role":        "p.role",
@@ -32,22 +23,7 @@ _SORT_COLUMNS = {
 _SORT_ORDERS = {"asc", "desc"}
 
 
-def _normalize_game_filter(label: Optional[str]) -> Optional[str]:
-    if label is None or label == "All":
-        return None
-    if label in _GAME_LABEL_TO_DB:
-        return _GAME_LABEL_TO_DB[label]
-    return label.lower()
-
-
-def _label_game(db_value: Optional[str]) -> str:
-    if db_value is None:
-        return ""
-    return _GAME_DB_TO_LABEL.get(db_value, db_value)
-
-
 def _normalize(row: dict, team_name: str = "", team_slug: str = "") -> dict:
-    """Map a `players` row + optional team into the existing frontend wire shape."""
     name = row.get("display_name") or row.get("name") or "Unknown"
     slug = row.get("slug") or name.lower().replace(" ", "-")
     return {
@@ -55,9 +31,9 @@ def _normalize(row: dict, team_name: str = "", team_slug: str = "") -> dict:
         "displayName": name,
         "riotId":      row.get("riot_id") or "",
         "role":        row.get("role") or "",
-        "game":        _label_game(row.get("game")),
-        "team_name":   team_name,
-        "team_slug":   team_slug,
+        "game":        row.get("game") or "",
+        "teamName":    team_name,
+        "teamSlug":    team_slug,
         "active":      row.get("active", True),
     }
 
@@ -78,11 +54,10 @@ def list_players(
 
     direction = "DESC" if order == "desc" else "ASC"
     sort_expr = _SORT_COLUMNS[sort]
-    db_game = _normalize_game_filter(game)
+    db_game = game if game else None
     db_role = None if (role is None or role == "All") else role
 
     if team:
-        # Path B: filter via direct JOIN; team_name/team_slug = the requested team.
         sql = (
             f"SELECT p.id, p.slug, p.display_name, p.name, p.riot_id, p.role, p.game, p.active, "
             f"       t.name AS team_name, t.slug AS team_slug "
@@ -97,7 +72,6 @@ def list_players(
         )
         params: tuple = (team, db_game, db_game, db_role, db_role, limit)
     else:
-        # Path A: unfiltered; CTE picks each player's earliest active team for display.
         sql = (
             f"WITH first_team AS ("
             f"  SELECT DISTINCT ON (tp.player_id) "
@@ -128,15 +102,6 @@ def list_players(
 
 @router.get("/{slug}")
 def get_player(slug: str):
-    """Get one player by slug, with recent_matches + frequency.
-
-    Lookup tries the `slug` column first; falls back to slug derived from
-    display_name (lowercased, spaces→hyphens) for legacy/admin-entered
-    players that haven't been slug-normalized.
-
-    On slug collision, deterministic ORDER BY (exact slug match wins; then
-    earliest id).
-    """
     with get_cursor() as cur:
         cur.execute(
             "SELECT * FROM players "
@@ -150,7 +115,6 @@ def get_player(slug: str):
         if player is None:
             raise HTTPException(status_code=404, detail=f"Player '{slug}' not found")
 
-        # Pick this player's earliest active team for team_name/team_slug.
         cur.execute(
             "SELECT t.name, t.slug FROM teams t "
             "JOIN team_players tp ON tp.team_id = t.id "
@@ -162,7 +126,6 @@ def get_player(slug: str):
         team_name = team_row["name"] if team_row else ""
         team_slug = team_row["slug"] if team_row else ""
 
-        # Recent matches: per-game JOIN to the appropriate detail table.
         if player.get("game") == "valorant":
             cur.execute(
                 "SELECT pms.id AS pms_id, pms.match_id, pms.map_name, pms.team_name, "
@@ -195,22 +158,20 @@ def get_player(slug: str):
             freq_field = "champion"
         else:
             stat_rows = []
-            freq_field = "agent"  # fallback for unknown games
+            freq_field = "agent"
 
-    # Shape recent_matches and frequency.
     recent_matches = [_match_stat_row(r) for r in stat_rows]
     freq_counter = Counter(r.get(freq_field) for r in stat_rows if r.get(freq_field))
     frequency = [{"name": n, "count": c} for n, c in freq_counter.most_common()]
 
     base = _normalize(player, team_name, team_slug)
-    base["recent_matches"] = recent_matches
-    base["frequency"] = frequency
-    base["frequency_field"] = freq_field
+    base["recentMatches"]  = recent_matches
+    base["frequency"]      = frequency
+    base["frequencyField"] = freq_field
     return base
 
 
 def _match_stat_row(r: dict) -> dict:
-    """Convert a recent-match row into the frontend `MatchStat` shape (camelCase)."""
     own_team_id = r.get("team_id")
     team1_id = r.get("team1_id")
     team2_id = r.get("team2_id")
@@ -219,8 +180,6 @@ def _match_stat_row(r: dict) -> dict:
     elif own_team_id == team2_id:
         own_score, opp_score = r.get("team2_score"), r.get("team1_score")
     else:
-        # team_id doesn't match either side (null / stale / cross-match data) —
-        # don't fabricate a win/loss.
         own_score, opp_score = None, None
     if own_score is None or opp_score is None or own_score == opp_score:
         win: Optional[bool] = None
@@ -228,7 +187,7 @@ def _match_stat_row(r: dict) -> dict:
         win = own_score > opp_score
     out: dict[str, Any] = {
         "matchId":  str(r["match_id"]) if r.get("match_id") is not None else None,
-        "game":     _label_game(r.get("game")),
+        "game":     r.get("game") or "",
         "mapName":  r.get("map_name") or "",
         "teamName": r.get("team_name") or "",
         "kills":    r.get("kills"),

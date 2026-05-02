@@ -152,7 +152,7 @@ function OrgCard({
           <span className="font-semibold">{org.abbreviation}</span>
           <span className="text-white/50 text-sm">{org.name}</span>
           <span className="text-xs text-white/40">
-            {org.games.map((g) => (g === "Valorant" ? "VAL" : "LoL")).join(" · ")}
+            {org.games.map((g) => (g === "valorant" ? "VAL" : "LoL")).join(" · ")}
           </span>
         </button>
         <div className="flex items-center gap-2">
@@ -328,7 +328,7 @@ function CreateOrgModal({
 }) {
   const [name, setName] = useState("");
   const [abbr, setAbbr] = useState("");
-  const [games, setGames] = useState<Game[]>(["Valorant"]);
+  const [games, setGames] = useState<Game[]>(["valorant"]);
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState("");
 
@@ -384,7 +384,7 @@ function CreateOrgModal({
         <div>
           <label className="block text-xs text-white/50 mb-2">Games</label>
           <div className="flex gap-2">
-            {(["Valorant", "League of Legends"] as Game[]).map((g) => (
+            {(["valorant", "lol"] as Game[]).map((g) => (
               <button
                 key={g}
                 type="button"
@@ -395,7 +395,7 @@ function CreateOrgModal({
                     : "border-white/20 text-white/70 hover:bg-white/5"
                 }`}
               >
-                {g === "Valorant" ? "Valorant" : "LoL"}
+                {g === "valorant" ? "VAL" : "LoL"}
               </button>
             ))}
           </div>
@@ -480,8 +480,8 @@ function AddSeasonModal({
             onChange={(e) => setSemester(e.target.value as Semester)}
             className="w-full px-3 py-2 rounded bg-black/40 border border-white/20"
           >
-            <option>Fall</option>
-            <option>Spring</option>
+            <option value="fall">Fall</option>
+            <option value="spring">Spring</option>
           </select>
         </div>
         <label className="flex items-center gap-2 text-sm">

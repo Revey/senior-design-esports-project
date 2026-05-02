@@ -46,11 +46,8 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 ADMIN_SECRET = os.getenv("ADMIN_SECRET", ADMIN_PASSWORD or "dev-insecure-secret")
 TOKEN_TTL_SECONDS = 60 * 60 * 12  # 12h
 
-_GAME_LABEL_TO_DB = {"Valorant": "valorant", "League of Legends": "lol"}
-_GAME_DB_TO_LABEL = {v: k for k, v in _GAME_LABEL_TO_DB.items()}
-
-_SEMESTER_LABEL_TO_DB = {"Fall": "fall", "Spring": "spring", "Summer": "summer"}
-_SEMESTER_DB_TO_LABEL = {v: k for k, v in _SEMESTER_LABEL_TO_DB.items()}
+_VALID_GAMES = {"valorant", "lol"}
+_VALID_SEMESTERS = {"fall", "spring", "summer"}
 
 
 # ---------- auth helpers ----------
@@ -98,64 +95,28 @@ def _int_id(s: str, label: str = "id") -> int:
         raise HTTPException(status_code=400, detail=f"Invalid {label}: {s!r}")
 
 
-def _label_game(db_value: Optional[str]) -> str:
-    if db_value is None:
-        return ""
-    return _GAME_DB_TO_LABEL.get(db_value, db_value)
-
-
-def _db_game(label: Optional[str]) -> Optional[str]:
-    if label is None:
-        return None
-    if label in _GAME_LABEL_TO_DB:
-        return _GAME_LABEL_TO_DB[label]
-    return label.lower()
-
-
-def _label_semester(db_value: Optional[str]) -> str:
-    if db_value is None:
-        return ""
-    return _SEMESTER_DB_TO_LABEL.get(db_value, db_value)
-
-
-def _db_semester(label: str) -> str:
-    if label in _SEMESTER_LABEL_TO_DB:
-        return _SEMESTER_LABEL_TO_DB[label]
-    return label.lower()
-
-
-def _year_string_to_int(year_str: str) -> int:
-    """'2025-2026' + Fall -> 2025; '2025-2026' + Spring -> 2026.
-    Caller picks which year to return based on semester. This helper just
-    parses the four-digit string; semester picking is in _season_create_year.
+def _season_create_year(year_str: str, semester: str) -> int:
+    """Phase 4: year is a 4-year-pair string like '2025-2026' (admin convention).
+    Semester is now lowercase ('fall'/'spring'/'summer'). Convention: 'spring'
+    keeps the second part, others keep the first.
     """
     if not re.match(r"^\d{4}-\d{4}$", year_str):
         raise HTTPException(status_code=400, detail="year must be like 2025-2026")
-    return int(year_str.split("-")[0])
-
-
-def _season_create_year(year_str: str, semester_label: str) -> int:
-    """Mongo stored a year-pair string; Phase 1 schema stores a single int year.
-    Convention: Fall keeps the first year, Spring keeps the second, Summer keeps
-    the first. Matches the Mongo _season_label() logic."""
-    if not re.match(r"^\d{4}-\d{4}$", year_str):
-        raise HTTPException(status_code=400, detail="year must be like 2025-2026")
     parts = year_str.split("-")
-    return int(parts[1] if semester_label == "Spring" else parts[0])
+    return int(parts[1] if semester == "spring" else parts[0])
 
 
-def _season_year_string(year: int, semester_label: str) -> str:
-    """Reverse of _season_create_year for response synthesis.
-    Fall -> 'YYYY-YYYY+1'; Spring -> 'YYYY-1-YYYY'; Summer -> 'YYYY-YYYY+1'."""
-    if semester_label == "Spring":
+def _season_year_string(year: int, semester: str) -> str:
+    if semester == "spring":
         return f"{year - 1}-{year}"
     return f"{year}-{year + 1}"
 
 
-def _season_label(org_abbr: str, semester_label: str, year_str: str) -> str:
+def _season_label(org_abbr: str, semester: str, year_str: str) -> str:
+    """Build a human-friendly label like 'CVAL Fall 2025'."""
     years = year_str.split("-")
-    shown = years[0] if semester_label == "Fall" else (years[1] if len(years) > 1 else years[0])
-    return f"{org_abbr} {semester_label} {shown}"
+    shown = years[0] if semester == "fall" else (years[1] if len(years) > 1 else years[0])
+    return f"{org_abbr} {semester.capitalize()} {shown}"
 
 
 def _get_active_season_id(cur) -> Optional[int]:
@@ -184,7 +145,7 @@ def _shape_team(r: dict) -> dict:
         "slug":       r["slug"],
         "school":     r.get("school_name") or "",
         "schoolId":   str(r["school_id"]) if r.get("school_id") is not None else None,
-        "game":       _label_game(r.get("game")),
+        "game":       (r.get("game") or ""),
         "tier":       r.get("tier"),
         "wins":       r.get("wins") or 0,
         "losses":     r.get("losses") or 0,
@@ -210,12 +171,12 @@ def _shape_org(r: dict) -> dict:
         "name":         r["name"],
         "abbreviation": r["abbreviation"],
         "slug":         r["slug"],
-        "games":        [_label_game(g) for g in (r.get("games") or [])],
+        "games":        [(g) or "" for g in (r.get("games") or [])],
     }
 
 
 def _shape_season(r: dict) -> dict:
-    semester_label = _label_semester(r.get("semester"))
+    semester_label = (r.get("semester") or "")
     year_str = _season_year_string(r["year"], semester_label) if r.get("year") else ""
     return {
         "_id":      str(r["id"]),
@@ -268,7 +229,7 @@ class SchoolCreate(BaseModel):
 class TeamCreate(BaseModel):
     schoolId: str
     name: str
-    game: Literal["Valorant", "League of Legends"]
+    game: Literal["valorant", "lol"]
     tier: Optional[str] = None
 
 
@@ -298,13 +259,13 @@ class OrgUpdate(BaseModel):
 class SeasonCreate(BaseModel):
     orgId: str
     year: str
-    semester: Literal["Fall", "Spring", "Summer"]
+    semester: Literal["fall", "spring", "summer"]
     active: bool = False
 
 
 class SeasonUpdate(BaseModel):
     year: Optional[str] = None
-    semester: Optional[Literal["Fall", "Spring", "Summer"]] = None
+    semester: Optional[Literal["fall", "spring", "summer"]] = None
     active: Optional[bool] = None
 
 
@@ -370,11 +331,11 @@ class LolPlayerStat(BaseModel):
 
 
 class MatchCreate(BaseModel):
-    game: Literal["Valorant", "League of Legends"]
+    game: Literal["valorant", "lol"]
     team1Id: str
     team2Id: str
     date: Optional[str] = None
-    format: Literal["BO1", "BO3", "BO5"] = "BO1"
+    format: Literal["bo1", "bo3", "bo5"] = "bo1"
     # Optional new-hierarchy refs:
     orgId: Optional[str] = None
     seasonId: Optional[str] = None
@@ -454,7 +415,7 @@ def list_admin_teams(
     limit: int = Query(50, ge=1, le=200),
 ):
     school_id = _int_id(schoolId, "schoolId") if schoolId else None
-    db_game = _db_game(game) if game else None
+    db_game = game if game else None
     with get_cursor() as cur:
         cur.execute(
             "SELECT * FROM teams "
@@ -475,7 +436,7 @@ def create_team(req: TeamCreate):
     if not name:
         raise HTTPException(400, "name required")
     slug = _slugify(name)
-    db_game = _db_game(req.game)
+    db_game = req.game
     with get_cursor() as cur:
         cur.execute("SELECT * FROM schools WHERE id = %s", (school_id,))
         school = cur.fetchone()
@@ -686,7 +647,7 @@ def unlink_player(player_id: str, req: PlayerLink):
 
 @router.get("/orgs", dependencies=[Depends(require_admin)])
 def list_orgs(q: str = Query("", max_length=100), game: Optional[str] = None, limit: int = Query(50, ge=1, le=200)):
-    db_g = _db_game(game) if game else None
+    db_g = game if game else None
     with get_cursor() as cur:
         cur.execute(
             "SELECT * FROM organizations "
@@ -706,7 +667,7 @@ def create_org(req: OrgCreate):
     if not name or not abbr:
         raise HTTPException(400, "name and abbreviation required")
     slug = _slugify(abbr)
-    games_db = [_db_game(g) for g in req.games if _db_game(g) is not None]
+    games_db = [g for g in req.games if g is not None]
     if not games_db:
         raise HTTPException(400, "at least one game required (Valorant or League of Legends)")
     with get_cursor() as cur:
@@ -735,7 +696,7 @@ def update_org(org_id: str, req: OrgUpdate):
         sets.append("abbreviation = %s"); params.append(abbr)
         sets.append("slug = %s"); params.append(_slugify(abbr))
     if req.games is not None:
-        games_db = [_db_game(g) for g in req.games if _db_game(g) is not None]
+        games_db = [g for g in req.games if g is not None]
         if not games_db:
             raise HTTPException(400, "games cannot be empty")
         sets.append("games = %s"); params.append(games_db)
@@ -800,7 +761,7 @@ def list_seasons(orgId: Optional[str] = None, active: Optional[bool] = None, lim
 def create_season(req: SeasonCreate):
     oid = _int_id(req.orgId, "orgId")
     db_year = _season_create_year(req.year, req.semester)
-    db_sem = _db_semester(req.semester)
+    db_sem = req.semester
 
     with get_conn() as conn:
         try:
@@ -850,13 +811,13 @@ def update_season(season_id: str, req: SeasonUpdate):
                     raise HTTPException(404, "Season not found")
                 cur.execute("SELECT * FROM organizations WHERE id = %s", (season["org_id"],))
                 org = cur.fetchone()
-                semester_label = _label_semester(season["semester"])
+                semester_label = (season["semester"]) or ""
                 year_int = season["year"]
                 sets: list[str] = []
                 params: list[Any] = []
                 if req.semester is not None:
                     semester_label = req.semester
-                    sets.append("semester = %s"); params.append(_db_semester(req.semester))
+                    sets.append("semester = %s"); params.append(req.semester)
                 if req.year is not None:
                     year_int = _season_create_year(req.year, semester_label)
                     sets.append("year = %s"); params.append(year_int)
@@ -1206,7 +1167,7 @@ def create_match(req: MatchCreate):
     t2_id = _int_id(req.team2Id, "team2Id")
     if t1_id == t2_id:
         raise HTTPException(400, "team1 and team2 must differ")
-    db_game = _db_game(req.game)
+    db_game = req.game
     db_format = req.format.lower()  # frontend BO1/BO3/BO5 → schema bo1/bo3/bo5
 
     match_date = req.date or datetime.now(timezone.utc).isoformat()
@@ -1240,7 +1201,7 @@ def create_match(req: MatchCreate):
                     raise HTTPException(409, "A match between these teams on this date already exists")
 
                 # Compute aggregate match scores.
-                if req.game == "Valorant":
+                if req.game == "valorant":
                     if not req.maps:
                         raise HTTPException(400, "At least one map required for Valorant")
                     t1_maps = sum(1 for m in req.maps if m.team1Score > m.team2Score)
@@ -1267,7 +1228,7 @@ def create_match(req: MatchCreate):
                 match_id = match_row["id"]
 
                 # Insert per-player stats.
-                if req.game == "Valorant":
+                if req.game == "valorant":
                     for m in req.maps:
                         for side, players in (("team1", m.team1Players), ("team2", m.team2Players)):
                             team_id = t1_id if side == "team1" else t2_id
@@ -1452,7 +1413,7 @@ def admin_stats():
                   else str(r["team2_id"]) if t2 > t1 else None)
         recent.append({
             "_id":          str(r["id"]),
-            "game":         _label_game(r["game"]),
+            "game":         (r["game"]) or "",
             "team1Id":      str(r["team1_id"]),
             "team2Id":      str(r["team2_id"]),
             "team1Name":    r.get("team1_name") or "",
@@ -1474,5 +1435,5 @@ def admin_stats():
             "organizations": counts["organizations"],
             "conferences":   counts["conferences"],
         },
-        "recent_matches": recent,
+        "recentMatches": recent,
     }

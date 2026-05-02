@@ -124,12 +124,12 @@ export default function AdminMatchesPage() {
                 <div>
                   <span
                     className={
-                      m.game === "Valorant"
+                      m.game === "valorant"
                         ? "px-2 py-0.5 rounded text-xs font-semibold bg-[#ff465526] text-[#ff4655]"
                         : "px-2 py-0.5 rounded text-xs font-semibold bg-[#c89b3c26] text-[#c89b3c]"
                     }
                   >
-                    {m.game === "Valorant" ? "VAL" : "LoL"}
+                    {m.game === "valorant" ? "VAL" : "LoL"}
                   </span>
                 </div>
                 <div>

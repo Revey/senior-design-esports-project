@@ -54,7 +54,7 @@ function MatchesContent() {
     setError(null);
     setLoaded(false);
     const params = new URLSearchParams({ limit: String(PER_PAGE), page: String(page) });
-    if (game !== "All") params.set("game", game);
+    if (game !== "All") params.set("game", game === "Valorant" ? "valorant" : "lol");
 
     fetch(`${API}/api/matches/?${params}`)
       .then((r) => {
@@ -127,7 +127,7 @@ function MatchesContent() {
               <div style={s.leagueCol}>League</div>
             </div>
             {data.items.map((m) => {
-              const isVal = m.game === "Valorant";
+              const isVal = m.game === "valorant";
               const t1Won = m.winnerTeamId === m.team1Id;
               return (
                 <Link key={m._id} href={`/matches/${m._id}`} style={{ textDecoration: "none", color: "inherit" }}>

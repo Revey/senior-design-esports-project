@@ -25,7 +25,7 @@ type AdminStats = {
     organizations: number;
     conferences: number;
   };
-  recent_matches: RecentMatch[];
+  recentMatches: RecentMatch[];
 };
 
 export default function AdminHome() {
@@ -100,12 +100,12 @@ export default function AdminHome() {
           </div>
           {error && <p className="text-red-400 text-sm">{error}</p>}
           {!stats && !error && <p className="text-white/40 text-sm">Loading…</p>}
-          {stats && stats.recent_matches.length === 0 && (
+          {stats && stats.recentMatches.length === 0 && (
             <p className="text-white/40 text-sm">No matches entered yet.</p>
           )}
-          {stats && stats.recent_matches.length > 0 && (
+          {stats && stats.recentMatches.length > 0 && (
             <ul className="divide-y divide-white/5">
-              {stats.recent_matches.map((m) => (
+              {stats.recentMatches.map((m) => (
                 <li key={m._id} className="py-2 flex items-center justify-between text-sm">
                   <div>
                     <span className="font-medium">{m.team1Name}</span>
@@ -115,7 +115,7 @@ export default function AdminHome() {
                     <span className="font-medium">{m.team2Name}</span>
                   </div>
                   <div className="text-white/50 text-xs">
-                    {m.game === "Valorant" ? "VAL" : "LoL"} · {m.format} ·{" "}
+                    {m.game === "valorant" ? "VAL" : "LoL"} · {m.format} ·{" "}
                     {m.date ? new Date(m.date).toLocaleDateString() : "—"}
                   </div>
                 </li>

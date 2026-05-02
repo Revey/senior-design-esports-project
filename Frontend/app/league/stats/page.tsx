@@ -11,7 +11,7 @@ type RankInfo = {
   lp: number | null;
   wins: number | null;
   losses: number | null;
-  win_rate: number | null;
+  winRate: number | null;
 } | null;
 
 type RoleInfo = {
@@ -28,7 +28,7 @@ type MasteryInfo = {
 
 type Player = {
   _id?: string;
-  team_name: string | null;
+  teamName: string | null;
   school: string | null;
   display_name: string | null;
   team_role_from_clol: string | null;
@@ -85,8 +85,8 @@ function formatRank(rank: RankInfo): string {
     pieces.push(`${rank.wins}W-${rank.losses}L`);
   }
 
-  if (rank.win_rate !== null && rank.win_rate !== undefined) {
-    pieces.push(`${rank.win_rate}% WR`);
+  if (rank.winRate !== null && rank.winRate !== undefined) {
+    pieces.push(`${rank.winRate}% WR`);
   }
 
   return pieces.join(" • ");

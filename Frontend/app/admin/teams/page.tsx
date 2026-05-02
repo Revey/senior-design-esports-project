@@ -17,7 +17,7 @@ import {
 } from "../adminClient";
 
 type GameFilter = "All" | "Valorant" | "League of Legends";
-type Game = "Valorant" | "League of Legends";
+type Game = "valorant" | "lol";
 
 export default function TeamsAdmin() {
   const router = useRouter();
@@ -35,7 +35,7 @@ export default function TeamsAdmin() {
   const reload = useCallback(async () => {
     const params = new URLSearchParams({ limit: "100" });
     if (query) params.set("q", query);
-    if (gameFilter !== "All") params.set("game", gameFilter);
+    if (gameFilter !== "All") params.set("game", gameFilter === "Valorant" ? "valorant" : "lol");
     const data = await adminFetch<Team[]>(`/api/admin/teams?${params}`);
     setTeams(data);
   }, [query, gameFilter]);
@@ -81,7 +81,7 @@ export default function TeamsAdmin() {
                       : "bg-black/40 text-white/60 hover:text-white"
                   }`}
                 >
-                  {g === "League of Legends" ? "LoL" : g}
+                  {g === "League of Legends" ? "LoL" : g === "Valorant" ? "VAL" : g}
                 </button>
               ),
             )}
@@ -138,7 +138,7 @@ function CreateTeamModal({
   const [schoolQ, setSchoolQ] = useState("");
   const [school, setSchool] = useState<School | null>(null);
   const [teamName, setTeamName] = useState("");
-  const [game, setGame] = useState<Game>("Valorant");
+  const [game, setGame] = useState<Game>("valorant");
   const [players, setPlayers] = useState<PlayerRow[]>([blankPlayer()]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -274,15 +274,15 @@ function CreateTeamModal({
               onChange={(e) => setGame(e.target.value as Game)}
               className="w-full px-3 py-2 rounded bg-black/40 border border-white/20"
             >
-              <option>Valorant</option>
-              <option>League of Legends</option>
+              <option value="valorant">Valorant</option>
+              <option value="lol">League of Legends</option>
             </select>
           </div>
 
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="text-xs text-white/50">
-                Roster (optional) — adds to {game === "Valorant" ? "Valorant" : "LoL"} roster
+                Roster (optional) — adds to {game === "valorant" ? "Valorant" : "LoL"} roster
               </label>
               <button
                 type="button"
@@ -407,9 +407,9 @@ function TeamRow({ team }: { team: Team }) {
     [],
   );
 
-  const gameLabel = team.game === "Valorant" ? "VAL" : "LoL";
+  const gameLabel = team.game === "valorant" ? "VAL" : "LoL";
   const gameBadgeColor =
-    team.game === "Valorant" ? "bg-red-500/20 text-red-300" : "bg-blue-500/20 text-blue-300";
+    team.game === "valorant" ? "bg-red-500/20 text-red-300" : "bg-blue-500/20 text-blue-300";
 
   return (
     <div className="rounded-lg border border-white/10 bg-white/5 overflow-hidden">
@@ -510,7 +510,7 @@ function MembershipsSection({
   teamGame,
 }: {
   teamId: string;
-  teamGame: "Valorant" | "League of Legends";
+  teamGame: "valorant" | "lol";
 }) {
   const [memberships, setMemberships] = useState<Membership[]>([]);
   const [orgs, setOrgs] = useState<Organization[]>([]);
