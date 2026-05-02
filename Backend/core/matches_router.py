@@ -18,6 +18,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
+from core.consent import CONSENTED_FILTER_SQL
 from core.db import get_cursor
 
 router = APIRouter()
@@ -132,7 +133,7 @@ def get_match(match_id: str):
                 "FROM player_match_stats pms "
                 "JOIN players p ON p.id = pms.player_id "
                 "LEFT JOIN pms_valorant_details v ON v.pms_id = pms.id "
-                "WHERE pms.match_id = %s "
+                f"WHERE pms.match_id = %s {CONSENTED_FILTER_SQL} "
                 "ORDER BY pms.map_name, pms.id",
                 (m_id,),
             )
@@ -145,7 +146,7 @@ def get_match(match_id: str):
                 "FROM player_match_stats pms "
                 "JOIN players p ON p.id = pms.player_id "
                 "LEFT JOIN pms_lol_details l ON l.pms_id = pms.id "
-                "WHERE pms.match_id = %s "
+                f"WHERE pms.match_id = %s {CONSENTED_FILTER_SQL} "
                 "ORDER BY pms.id",
                 (m_id,),
             )

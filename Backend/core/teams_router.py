@@ -14,6 +14,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
+from core.consent import CONSENTED_FILTER_SQL
 from core.db import get_cursor
 
 router = APIRouter()
@@ -116,11 +117,12 @@ def get_team(slug: str):
         if team is None:
             raise HTTPException(status_code=404, detail=f"Team '{slug}' not found")
 
+        # Phase 5 consent gate: roster only includes consented players.
         cur.execute(
             "SELECT p.display_name, p.role, p.riot_id, p.active "
             "FROM players p "
             "JOIN team_players tp ON tp.player_id = p.id "
-            "WHERE tp.team_id = %s AND tp.left_at IS NULL "
+            f"WHERE tp.team_id = %s AND tp.left_at IS NULL {CONSENTED_FILTER_SQL} "
             "ORDER BY p.display_name",
             (team["id"],),
         )

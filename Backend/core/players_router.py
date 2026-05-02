@@ -11,6 +11,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
+from core.consent import CONSENTED_FILTER_SQL, is_player_consented
 from core.db import get_cursor
 
 router = APIRouter()
@@ -67,6 +68,7 @@ def list_players(
             f"WHERE t.slug = %s "
             f"  AND (%s::text IS NULL OR p.game = %s::text) "
             f"  AND (%s::text IS NULL OR p.role = %s::text) "
+            f"  {CONSENTED_FILTER_SQL} "
             f"ORDER BY {sort_expr} {direction} NULLS LAST, p.display_name "
             f"LIMIT %s"
         )
@@ -88,6 +90,7 @@ def list_players(
             f"LEFT JOIN first_team ft ON ft.player_id = p.id "
             f"WHERE (%s::text IS NULL OR p.game = %s::text) "
             f"  AND (%s::text IS NULL OR p.role = %s::text) "
+            f"  {CONSENTED_FILTER_SQL} "
             f"ORDER BY {sort_expr} {direction} NULLS LAST, p.display_name "
             f"LIMIT %s"
         )
@@ -115,6 +118,11 @@ def get_player(slug: str):
         if player is None:
             raise HTTPException(status_code=404, detail=f"Player '{slug}' not found")
 
+        # Phase 5 consent gate: non-consented players are not publicly visible.
+        # Admin routes use admin_router and don't go through this code path.
+        if not is_player_consented(cur, player["id"]):
+            raise HTTPException(status_code=404, detail=f"Player '{slug}' not found")
+
         cur.execute(
             "SELECT t.name, t.slug FROM teams t "
             "JOIN team_players tp ON tp.team_id = t.id "
@@ -133,9 +141,10 @@ def get_player(slug: str):
                 "       v.kills, v.deaths, v.assists, v.agent, v.acs, "
                 "       m.team1_id, m.team2_id, m.team1_score, m.team2_score "
                 "FROM player_match_stats pms "
+                "JOIN players p ON p.id = pms.player_id "
                 "LEFT JOIN pms_valorant_details v ON v.pms_id = pms.id "
                 "LEFT JOIN matches m ON m.id = pms.match_id "
-                "WHERE pms.player_id = %s AND pms.game = 'valorant' "
+                f"WHERE pms.player_id = %s AND pms.game = 'valorant' {CONSENTED_FILTER_SQL} "
                 "ORDER BY pms.id DESC LIMIT 25",
                 (player["id"],),
             )
@@ -148,9 +157,10 @@ def get_player(slug: str):
                 "       l.kills, l.deaths, l.assists, l.champion, l.cs, l.lane, "
                 "       m.team1_id, m.team2_id, m.team1_score, m.team2_score "
                 "FROM player_match_stats pms "
+                "JOIN players p ON p.id = pms.player_id "
                 "LEFT JOIN pms_lol_details l ON l.pms_id = pms.id "
                 "LEFT JOIN matches m ON m.id = pms.match_id "
-                "WHERE pms.player_id = %s AND pms.game = 'lol' "
+                f"WHERE pms.player_id = %s AND pms.game = 'lol' {CONSENTED_FILTER_SQL} "
                 "ORDER BY pms.id DESC LIMIT 25",
                 (player["id"],),
             )

@@ -350,8 +350,34 @@ def rso_callback(
     except Exception as exc:
         logger.warning("Could not look up Riot ID for %s: %s", puuid[:8], exc)
 
-    # --- Store tokens in MongoDB ---
+    # --- Store tokens ---
     rso_store.store_tokens(puuid, token_data, game_name, tag_line)
+
+    # --- Grant consent (Phase 5 of postgres-migration-v2) ---
+    # RSO sign-in IS the player's consent to make their profile public.
+    # See CONSTITUTION §5 + project_rso_consent_model memory.
+    try:
+        from core.consent import grant_consent_by_puuid
+        from core.db import get_conn
+        from psycopg2.extras import RealDictCursor
+
+        display_name = (
+            f"{game_name}#{tag_line}" if (game_name and tag_line)
+            else (game_name or tag_line or puuid[:8])
+        )
+        with get_conn() as conn:
+            try:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    grant_consent_by_puuid(cur, puuid, display_name=display_name)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                logger.exception("Consent grant failed for puuid=%s", puuid[:8])
+                # Continue: token storage already succeeded; the user is signed in,
+                # they just won't be publicly visible. Self-revoke / re-grant later
+                # is fine.
+    except Exception:
+        logger.exception("Consent helper unavailable; skipping consent grant")
 
     # --- Set session cookie and redirect to frontend ---
     response = RedirectResponse(
@@ -392,6 +418,39 @@ def rso_logout():
     )
     response.delete_cookie(_SESSION_COOKIE, path="/api/valorant/auth")
     return response
+
+
+@router.post("/auth/revoke-consent")
+def rso_revoke_consent(rso_session: Optional[str] = Cookie(default=None)):
+    """Self-service consent revocation (Phase 5).
+
+    Authenticated by the rso_session cookie (the same one issued at RSO
+    callback). Marks the player's active player_consents row as revoked, so
+    their profile disappears from the public site immediately.
+
+    The player's stored RSO tokens are NOT deleted by this endpoint —
+    revoking consent only flips visibility. Use POST /auth/logout to clear
+    the session cookie + DELETE /auth/linked-players (admin only) to remove
+    tokens entirely.
+    """
+    puuid = _get_session_puuid(rso_session)
+    if not puuid:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    from core.consent import revoke_consent_for_puuid
+    from core.db import get_conn
+    from psycopg2.extras import RealDictCursor
+
+    with get_conn() as conn:
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                changed = revoke_consent_for_puuid(cur, puuid)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    return {"ok": True, "revoked": changed}
 
 
 @router.get("/auth/linked-players")
