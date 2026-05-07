@@ -20,10 +20,7 @@ build/
 .DS_Store
 *.pem
 
-# Claude Code
-.claude/
-.mcp.json
-CLAUDE.md
+
 
 # Dev/seed scripts
 Backend/seed_data.py
